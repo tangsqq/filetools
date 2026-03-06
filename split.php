@@ -387,7 +387,13 @@ if (isset($_FILES['excel_file'])) {
             align-items: center;
             justify-content: center;
             text-decoration: none;
+            transition: all 0.3s ease;
             z-index: 10000;
+        }
+
+        .home-btn:hover {
+            transform: scale(1.1);
+            color: lightgray;
         }
 
         .home-btn i {
@@ -777,5 +783,6 @@ if (isset($_FILES['excel_file'])) {
         }
     </script>
 </body>
+
 
 </html>
