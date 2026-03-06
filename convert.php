@@ -320,8 +320,7 @@ if (isset($_POST["submit"])) {
             top: 20px;
             right: 20px;
             color: #1e293b;
-            width: 50px;
-            height: 50px;
+            font-size: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -336,7 +335,7 @@ if (isset($_POST["submit"])) {
         }
 
         .home-btn i {
-            font-size: 40px;
+            font-size: 30px;
         }
     </style>
 </head>
@@ -384,5 +383,6 @@ if (isset($_POST["submit"])) {
 </body>
 
 </html>
+
 
 
