@@ -203,7 +203,7 @@ if (isset($_POST["submit"])) {
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--bg);
+            background-color: white;
             background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
             background-size: 20px 20px;
             margin: 0;
@@ -216,59 +216,124 @@ if (isset($_POST["submit"])) {
 
         .container {
             background: white;
-            padding: 30px;
-            border-radius: 12px;
+            padding: 40px 35px;
+            border-radius: 20px;
             border: 1px solid #000;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08), 0 2px 10px rgba(0, 0, 0, 0.05);
             width: 100%;
-            max-width: 400px;
+            max-width: 420px;
+            transition: all 0.3s ease;
         }
 
         h2 {
-            color: #333;
+            color: #111827;
             text-align: center;
-            margin-bottom: 25px;
+            margin-bottom: 30px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
         }
 
         label {
             display: block;
             margin-bottom: 8px;
-            font-weight: bold;
-            color: #666;
+            font-weight: 600;
+            font-size: 14px;
+            color: #374151;
         }
 
-        input[type="file"],
-        select {
+        .file-upload-label {
+            padding: 12px 22px;
+            border-radius: 20px;
+            background: white;
+            color: black;
+            border: 1px dashed black;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.25s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            height: 44px;
             width: 100%;
-            padding: 10px;
-            margin-bottom: 20px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
+            justify-content: center;
             box-sizing: border-box;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .file-upload-label:hover {
+            background: lightgray;
+            border-color: lightgray;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .select-wrapper {
+            position: relative;
+            width: 100%;
+            margin-bottom: 22px;
+        }
+
+        .select-wrapper select {
+            width: 100%;
+            height: 44px;
+            padding: 0 40px 0 14px;
+            border-radius: 20px;
+            border: 1px solid black;
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            font-size: 14px;
+            font-weight: 600;
+            color: black;
+            cursor: pointer;
+            background-color: white;
+        }
+
+        .select-wrapper::after {
+            font-family: "Font Awesome 6 Free";
+            content: "\f0d7";
+            font-weight: 900;
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            font-size: 20px;
+            color: black;
         }
 
         input[type="submit"] {
             width: 100%;
-            background: black;
+            background: #111827;
             color: white;
             border: none;
-            padding: 12px;
-            border-radius: 6px;
+            padding: 13px;
+            border-radius: 20px;
             cursor: pointer;
-            font-size: 16px;
-            transition: background 0.3s;
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: .5px;
+            transition: all 0.25s ease;
         }
 
         input[type="submit"]:hover {
-            background: #333;
+            background: #000;
+            transform: translateY(-1px);
+            box-shadow: 0 5px 12px rgba(0, 0, 0, 0.2);
         }
 
         .result {
             margin-top: 20px;
             padding: 15px;
-            background: #f9f9f9;
-            border-left: 5px solid black;
-            word-break: break-all;
+            background: #f9fafb;
+            border-left: 4px solid #111827;
+            border-radius: 6px;
+            font-size: 14px;
+            word-break: break-word;
         }
 
         #loadingOverlay {
@@ -279,8 +344,8 @@ if (isset($_POST["submit"])) {
             width: 100%;
             height: 100%;
             background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(6px);
             z-index: 9999;
-            backdrop-filter: blur(5px);
         }
 
         .loading-box {
@@ -290,17 +355,17 @@ if (isset($_POST["submit"])) {
             transform: translate(-50%, -50%);
             text-align: center;
             background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            padding: 45px 50px;
+            border-radius: 20px;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.12);
         }
 
         .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid black;
+            border: 4px solid #f1f5f9;
+            border-top: 4px solid #111827;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
+            width: 42px;
+            height: 42px;
             animation: spin 1s linear infinite;
             margin: 0 auto 15px;
         }
@@ -319,19 +384,10 @@ if (isset($_POST["submit"])) {
             position: fixed;
             top: 20px;
             right: 20px;
-            color: #1e293b;
-            font-size: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            color: #1f2937;
             text-decoration: none;
-            transition: all 0.3s ease;
+            transition: all 0.25s ease;
             z-index: 10000;
-        }
-
-        .home-btn:hover {
-            transform: scale(1.1);
-            color: lightgray;
         }
 
         .home-btn i {
@@ -345,14 +401,23 @@ if (isset($_POST["submit"])) {
         <h2>File Converter</h2>
         <form id="convertForm" action="" method="post" enctype="multipart/form-data">
             <label>Choose File</label>
-            <input type="file" name="fileToUpload" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" required>
+            <label for="fileToUpload" class="file-upload-label">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                <span id="file-name-text">Choose Files</span>
+            </label>
+            <input type="file" id="fileToUpload" name="fileToUpload" accept="application/pdf, .xlsx, .xls, .doc, .docx, .ppt, .pptx, .jpg, .jpeg, .png">
+
             <label>Convert To</label>
-            <select name="targetFormat">
-                <option value="pdf">PDF (.pdf)</option>
-                <option value="docx">Word (.docx)</option>
-                <option value="jpg">JPG (.jpg)</option>
-                <option value="png">PNG (.png)</option>
-            </select>
+            <div class="select-wrapper">
+                <select name="targetFormat">
+                    <option value="pdf">PDF (.pdf)</option>
+                    <option value="docx">Word (.docx)</option>
+                    <option value="jpg">JPG (.jpg)</option>
+                    <option value="png">PNG (.png)</option>
+                </select>
+            </div>
             <input type="submit" value="Convert" name="submit">
             <a href="index.html" class="home-btn" title="Back to Home"><i class="fa fa-home"></i></a>
         </form>
@@ -360,6 +425,7 @@ if (isset($_POST["submit"])) {
             <div class="result"><?php echo $message; ?></div>
         <?php endif; ?>
     </div>
+
     <div id="loadingOverlay">
         <div class="loading-box">
             <div class="spinner"></div>
@@ -367,8 +433,22 @@ if (isset($_POST["submit"])) {
             <p style="margin:10px 0 0; font-size:13px; color:#999;">Please wait...</p>
         </div>
     </div>
+
     <script>
+        // 显示选中文件名
+        document.getElementById('fileToUpload').onchange = function() {
+            if (this.files && this.files.length > 0) {
+                document.getElementById('file-name-text').innerText = this.files[0].name;
+            }
+        };
+
         document.getElementById('convertForm').onsubmit = function() {
+            // 验证是否已选文件
+            if (document.getElementById('fileToUpload').files.length === 0) {
+                alert("Please select a file first.");
+                return false;
+            }
+
             document.getElementById('loadingOverlay').style.display = 'block';
             document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
             var checkTimer = setInterval(function() {
@@ -383,7 +463,3 @@ if (isset($_POST["submit"])) {
 </body>
 
 </html>
-
-
-
-
