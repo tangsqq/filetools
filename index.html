@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📑</text></svg>">
+    <title>File Processing Hub</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--bg);
+            background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+            background-size: 20px 20px;
+            margin: 0;
+            color: #1e293b;
+            min-height: 100vh;
+        }
+
+        .container {
+            text-align: center;
+            width: 100%;
+            max-width: 900px;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #1a1a1a;
+            margin-bottom: 40px;
+            font-weight: 600;
+            letter-spacing: -1px;
+        }
+
+        .card-group {
+            display: flex;
+            gap: 100px;
+            justify-content: center;
+        }
+
+        .card {
+            background: white;
+            padding: 40px 50px;
+            border-radius: 20px;
+            flex: 1;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            text-decoration: none;
+            color: #333;
+            border: 1px solid #eee;
+            border-color: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .card:hover {
+            transform: translateY(-13px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .card i {
+            font-size: 50px;
+            color: #000;
+            margin-bottom: 25px;
+        }
+
+        .card h3 {
+            margin: 10px 0;
+            font-size: 25px;
+            color: #111;
+        }
+
+        .card p {
+            font-size: 15px;
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 10px;
+            min-height: 72px;
+            /* Keeps cards aligned */
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 10px 24px;
+            background: #000;
+            color: white;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: background 0.3s;
+        }
+
+        .card:hover .btn {
+            background: #333;
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 580px) {
+            .card-group {
+                flex-direction: column;
+            }
+
+            body {
+                height: auto;
+                padding: 40px 0;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>File Toolset Dashboard</h1>
+        <div class="card-group">
+
+            <div class="card-group">
+                <a href="split.php" class="card">
+                    <i class="fa fa-columns"></i>
+                    <h3>Big File Splitter</h3>
+                    Split large files into smaller parts, reorder pages easily, and cut documents by exact rows or file size.
+                </a>
+
+                <a href="convert.php" class="card">
+                    <i class="fa fa-exchange"></i>
+                    <h3>All-in-One Converter</h3>
+                    <p>Change files between Word, PDF, Excel in one click.</p>
+                </a>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>

@@ -1,0 +1,11 @@
+{
+    "require": {
+        "tecnickcom/tcpdf": "^6.10"
+    }
+}
+
+{
+    "require": {
+        "ext-imagick": "*"
+    }
+}
