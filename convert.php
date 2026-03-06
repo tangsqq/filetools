@@ -384,10 +384,19 @@ if (isset($_POST["submit"])) {
             position: fixed;
             top: 20px;
             right: 20px;
-            color: #1f2937;
+            color: #1e293b;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             text-decoration: none;
-            transition: all 0.25s ease;
+            transition: all 0.3s ease;
             z-index: 10000;
+        }
+
+        .home-btn:hover {
+            transform: scale(1.1);
+            color: lightgray;
         }
 
         .home-btn i {
@@ -463,3 +472,4 @@ if (isset($_POST["submit"])) {
 </body>
 
 </html>
+
