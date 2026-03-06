@@ -371,13 +371,8 @@ if (isset($_POST["submit"])) {
         }
 
         @keyframes spin {
-            0% {
-                transform: rotate(0deg);
-            }
-
-            100% {
-                transform: rotate(360deg);
-            }
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
         .home-btn {
@@ -401,6 +396,29 @@ if (isset($_POST["submit"])) {
 
         .home-btn i {
             font-size: 30px;
+        }
+
+        /* Modal Alert Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(4px);
+            z-index: 10001;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .btn-main {
+            background: #111827;
+            color: white;
+            border: none;
+            padding: 10px 25px;
+            border-radius: 15px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-top: 15px;
         }
     </style>
 </head>
@@ -435,6 +453,14 @@ if (isset($_POST["submit"])) {
         <?php endif; ?>
     </div>
 
+    <div id="customAlert" class="modal-overlay">
+        <div style="background: white; padding: 32px; border-radius: 25px; text-align: center; max-width: 360px; width: 90%;">
+            <h3 id="alertTitle">Status</h3>
+            <p id="alertMessage"></p>
+            <button class="btn btn-main" id="alertBtn" onclick="closeAlert()">OK</button>
+        </div>
+    </div>
+
     <div id="loadingOverlay">
         <div class="loading-box">
             <div class="spinner"></div>
@@ -444,6 +470,17 @@ if (isset($_POST["submit"])) {
     </div>
 
     <script>
+        // Custom Alert Functions
+        function showAlert(message, title = "Status") {
+            document.getElementById('alertTitle').innerText = title;
+            document.getElementById('alertMessage').innerText = message;
+            document.getElementById('customAlert').style.display = 'flex';
+        }
+
+        function closeAlert() {
+            document.getElementById('customAlert').style.display = 'none';
+        }
+
         // 显示选中文件名
         document.getElementById('fileToUpload').onchange = function() {
             if (this.files && this.files.length > 0) {
@@ -454,7 +491,7 @@ if (isset($_POST["submit"])) {
         document.getElementById('convertForm').onsubmit = function() {
             // 验证是否已选文件
             if (document.getElementById('fileToUpload').files.length === 0) {
-                alert("Please select a file first.");
+                showAlert("Please select a file first.", "Notice");
                 return false;
             }
 
