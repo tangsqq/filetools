@@ -97,7 +97,7 @@ if (isset($_FILES['excel_file'])) {
             text-align: center;
             max-width: 800px;
             margin: 0 auto 40px;
-            border: 1px solid white;
+            border: 1px solid #000;
         }
 
         .setup-card h2 {
@@ -786,3 +786,4 @@ if (isset($_FILES['excel_file'])) {
 
 
 </html>
+
