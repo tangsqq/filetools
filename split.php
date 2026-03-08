@@ -653,6 +653,10 @@ if (isset($_FILES['excel_file'])) {
             updateImageTransform();
 
             document.getElementById('previewModal').style.display = 'flex';
+
+            const homeBtn = document.querySelector('.home-btn');
+            if (homeBtn) homeBtn.style.display = 'none';
+
             document.getElementById('prevArrow').style.visibility = index > 0 ? 'visible' : 'hidden';
             document.getElementById('nextArrow').style.visibility = index < state.pageOrder.length - 1 ? 'visible' : 'hidden';
         }
@@ -666,6 +670,9 @@ if (isset($_FILES['excel_file'])) {
         function closePreview() {
             isDragging = false;
             document.getElementById('previewModal').style.display = 'none';
+
+            const homeBtn = document.querySelector('.home-btn');
+            if (homeBtn) homeBtn.style.display = 'flex';
         }
 
         // Zoom and Drag Listeners
@@ -785,5 +792,6 @@ if (isset($_FILES['excel_file'])) {
 
 
 </html>
+
 
 
