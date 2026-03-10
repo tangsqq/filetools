@@ -15,6 +15,7 @@ RUN apt-get update && \
     ghostscript \
     libreoffice \
     procps \
+    unzip \
     # Font support: Chinese (Zenhei) + Microsoft Fonts (Times New Roman, etc.)
     fonts-wqy-zenhei \
     ttf-mscorefonts-installer \
@@ -31,7 +32,7 @@ RUN pecl install imagick \
     && docker-php-ext-enable imagick \
     && docker-php-ext-install zip
 
-# 4. PHP Performance Configuration (Optimized for large document conversion)
+# 4. PHP Performance Configuration
 RUN { \
     echo 'upload_max_filesize = 100M'; \
     echo 'post_max_size = 110M'; \
@@ -48,7 +49,6 @@ WORKDIR /var/www/html
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # 7. [Critical Fix] Permissions and Environment Setup
-# LibreOffice requires a writable HOME directory for config and cache
 RUN mkdir -p /var/www/.config /var/www/.cache /var/www/html/temp_uploads && \
     chown -R www-data:www-data /var/www/ /var/www/html/ && \
     chmod -R 777 /tmp/
@@ -56,8 +56,13 @@ RUN mkdir -p /var/www/.config /var/www/.cache /var/www/html/temp_uploads && \
 # Force LibreOffice to use /var/www as its home to avoid permission errors
 ENV HOME=/var/www
 
-# 8. Apache Configuration
+# 8. Apache Configuration and Code Deployment
 COPY . /var/www/html/
+
+RUN composer install --no-interaction --optimize-autoloader --no-dev --ignore-platform-reqs
+
+RUN chown -R www-data:www-data /var/www/html/
+
 RUN a2enmod rewrite && \
     sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
 
