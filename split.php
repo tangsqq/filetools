@@ -1,29 +1,70 @@
 <?php
+/**
+ * Docker 优化版：Excel 预处理 + 多格式 PDF 转换
+ */
+
+// 1. 环境配置
+ini_set('display_errors', 0);
+error_reporting(E_ALL);
+ini_set('memory_limit', '1024M');
+set_time_limit(300);
+
+// 2. 引入 Composer (Docker 容器内路径)
+$autoload = __DIR__ . '/vendor/autoload.php';
+if (file_exists($autoload)) {
+    require $autoload;
+}
+
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Worksheet\PageSetup;
+
 if (isset($_FILES['excel_file'])) {
+    ob_start();
     header('Content-Type: application/json');
 
-    // 1. 对应 Dockerfile 中创建的目录，或使用系统临时目录
-    $uploadDir = '/tmp/pdf_tool_';
-    if (!is_dir($uploadDir)) {
-        mkdir($uploadDir, 0777, true);
-    }
+    $tmpFilePath = '';
+    $userConfigDir = '';
 
-    $file = $_FILES['excel_file'];
-    $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-    $tmpFilePath = $uploadDir . '/' . uniqid() . '_' . $file['name'];
-    move_uploaded_file($file['tmp_name'], $tmpFilePath);
+    try {
+        // --- 目录准备 (Linux 风格) ---
+        $uploadDir = '/tmp/pdf_tool';
+        if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
 
-    // 支持的格式
-    $officeExtensions = ['xlsx', 'xls', 'csv', 'doc', 'docx', 'ppt', 'pptx'];
-    $imageExtensions = ['jpg', 'jpeg', 'png'];
+        $file = $_FILES['excel_file'];
+        $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        $uniqueId = uniqid();
+        $tmpFilePath = $uploadDir . '/' . $uniqueId . '_' . $file['name'];
 
-    // 2. 【核心修改】在 Docker (Linux) 中，soffice 通常直接在环境变量中
-    // 且必须添加 --user-installation 参数防止权限冲突
-    $sofficePath = 'libreoffice';
-    $userConfigDir = '/tmp/libreoffice_user_' . uniqid();
+        if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
+            throw new Exception("文件上传失败。");
+        }
 
-    if (in_array($extension, $officeExtensions) || in_array($extension, $imageExtensions)) {
-        // 构建命令：指定输出目录，使用 headless 模式
+        // --- 核心逻辑 A：Excel 特殊预处理 ---
+        if (in_array($extension, ['xlsx', 'xls'])) {
+            if (class_exists('PhpOffice\PhpSpreadsheet\IOFactory')) {
+                $spreadsheet = IOFactory::load($tmpFilePath);
+                foreach ($spreadsheet->getAllSheets() as $sheet) {
+                    $setup = $sheet->getPageSetup();
+                    $setup->setOrientation(PageSetup::ORIENTATION_PORTRAIT);
+                    $setup->setFitToWidth(1);  // 强制宽度一页
+                    $setup->setFitToHeight(0); // 高度自适应
+                    $setup->setFitToPage(true);
+                }
+                $writerType = ($extension === 'xls') ? 'Xls' : 'Xlsx';
+                $writer = IOFactory::createWriter($spreadsheet, $writerType);
+                $writer->save($tmpFilePath);
+                
+                if (method_exists($spreadsheet, 'dispose')) $spreadsheet->dispose();
+                unset($spreadsheet, $writer);
+            }
+        }
+
+        // --- 核心逻辑 B：LibreOffice 转换 (Linux 命令) ---
+        // 在 Docker 中，soffice 通常直接可用
+        $sofficePath = 'libreoffice'; 
+        $userConfigDir = '/tmp/libre_user_' . $uniqueId;
+
+        // 构建 Linux 下的转换命令
         $cmd = "$sofficePath \"-env:UserInstallation=file://$userConfigDir\" --headless --convert-to pdf --outdir " . escapeshellarg($uploadDir) . " " . escapeshellarg($tmpFilePath) . " 2>&1";
 
         exec($cmd, $output, $returnVar);
@@ -32,25 +73,31 @@ if (isset($_FILES['excel_file'])) {
             $pdfPath = $uploadDir . '/' . pathinfo($tmpFilePath, PATHINFO_FILENAME) . '.pdf';
 
             if (file_exists($pdfPath)) {
+                $base64 = base64_encode(file_get_contents($pdfPath));
+                @unlink($pdfPath);
+                
+                ob_end_clean();
                 echo json_encode([
                     'success' => true,
-                    'pdf_base64' => base64_encode(file_get_contents($pdfPath)),
+                    'pdf_base64' => $base64,
                     'filename' => $file['name']
                 ]);
-                @unlink($pdfPath);
             } else {
-                echo json_encode(['success' => false, 'error' => 'PDF not generated. Debug: ' . implode("\n", $output)]);
+                throw new Exception("PDF 生成失败。调试: " . implode(" ", $output));
             }
         } else {
-            echo json_encode(['success' => false, 'error' => 'Conversion failed', 'debug' => $output]);
+            throw new Exception("转换引擎错误: " . implode(" ", $output));
         }
-    } else {
-        echo json_encode(['success' => false, 'error' => 'Unsupported format']);
+
+    } catch (Throwable $e) {
+        if (ob_get_length()) ob_end_clean();
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
     }
 
-    // 清理临时文件和 LibreOffice 产生的用户配置目录
-    @unlink($tmpFilePath);
-    if (is_dir($userConfigDir)) {
+    // --- 清理 ---
+    if (file_exists($tmpFilePath)) @unlink($tmpFilePath);
+    if (!empty($userConfigDir) && is_dir($userConfigDir)) {
+        // Linux 下删除目录
         exec("rm -rf " . escapeshellarg($userConfigDir));
     }
     exit;
@@ -792,6 +839,7 @@ if (isset($_FILES['excel_file'])) {
 
 
 </html>
+
 
 
 
