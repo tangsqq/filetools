@@ -1,7 +1,7 @@
 # 1. Use PHP 8.2 + Apache as the base
 FROM php:8.2-apache
 
-# 2. Configure Debian sources and install system dependencies
+# 2. Configure Debian sources and install system dependencies (LibreOffice + Fonts)
 RUN sed -i 's/main/main contrib/g' /etc/apt/sources.list.d/debian.sources || \
     sed -i 's/main/main contrib/g' /etc/apt/sources.list
 
@@ -22,19 +22,17 @@ RUN apt-get update && \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
-# Refresh font cache
+# Refresh font cache to ensure Excel converts with correct characters
 RUN fc-cache -f -v
 
 # 3. Install PHP Extensions
-RUN pecl install imagick \
-    && docker-php-ext-enable imagick \
-    && docker-php-ext-install zip
+RUN pecl install imagick && docker-php-ext-enable imagick && docker-php-ext-install zip
 
 # 4. PHP Performance Configuration
 RUN { \
     echo 'upload_max_filesize = 100M'; \
     echo 'post_max_size = 110M'; \
-    echo 'memory_limit = 512M'; \
+    echo 'memory_limit = 1024M'; \
     echo 'max_execution_time = 300'; \
     } > /usr/local/etc/php/conf.d/docker-php-custom.ini
 
@@ -44,31 +42,29 @@ RUN find /etc/ImageMagick* -name "policy.xml" -exec sed -i 's/rights="none" patt
 # 6. Set Working Directory
 WORKDIR /var/www/html
 
-# 7. 安装 Composer 二进制文件
+# 7. Install Composer binary
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# 8. 权限准备
-RUN mkdir -p /var/www/.config /var/www/.cache /var/www/html/temp_uploads && \
-    chown -R www-data:www-data /var/www/ /var/www/html/ && \
-    chmod -R 777 /tmp/
+# 8. Permission Setup: Create config directories for LibreOffice headless mode
+RUN mkdir -p /var/www/.config /var/www/.cache && \
+    chown -R www-data:www-data /var/www/
 
 ENV HOME=/var/www
 
-# 9. 部署代码并安装依赖 (关键步骤)
-# 先只复制 composer 相关文件以利用 Docker 缓存
+# 9. Deploy code and install dependencies
 COPY composer.json ./
-# 如果有 composer.lock 也建议复制: COPY composer.json composer.lock ./
+# Uncomment if you have a lock file: COPY composer.lock ./
 
-# 执行安装
+# Run install (This creates the 'vendor' folder inside the image)
 RUN composer install --no-interaction --optimize-autoloader --no-dev --ignore-platform-reqs
 
-# 复制其余所有代码
+# Copy the rest of the application
 COPY . /var/www/html/
 
-# 再次统一权限
+# Ensure web server user owns the files
 RUN chown -R www-data:www-data /var/www/html/
 
-# 10. Apache Configuration
+# 10. Enable Apache mod_rewrite
 RUN a2enmod rewrite && \
     sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
 
