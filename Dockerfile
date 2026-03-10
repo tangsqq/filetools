@@ -45,6 +45,8 @@ RUN find /etc/ImageMagick* -name "policy.xml" -exec sed -i 's/rights="none" patt
 # 6. Set Working Directory
 WORKDIR /var/www/html
 
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
 # 7. [Critical Fix] Permissions and Environment Setup
 # LibreOffice requires a writable HOME directory for config and cache
 RUN mkdir -p /var/www/.config /var/www/.cache /var/www/html/temp_uploads && \
