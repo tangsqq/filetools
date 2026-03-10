@@ -2,12 +2,10 @@
 FROM php:8.2-apache
 
 # 2. Configure Debian sources and install system dependencies
-# Enable 'contrib' to allow installation of ttf-mscorefonts-installer (Microsoft fonts)
 RUN sed -i 's/main/main contrib/g' /etc/apt/sources.list.d/debian.sources || \
     sed -i 's/main/main contrib/g' /etc/apt/sources.list
 
 RUN apt-get update && \
-    # Automatically accept Microsoft EULA for fonts
     echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
     apt-get install -y \
     libmagickwand-dev \
@@ -16,7 +14,7 @@ RUN apt-get update && \
     libreoffice \
     procps \
     unzip \
-    # Font support: Chinese (Zenhei) + Microsoft Fonts (Times New Roman, etc.)
+    git \
     fonts-wqy-zenhei \
     ttf-mscorefonts-installer \
     fonts-liberation \
@@ -24,10 +22,10 @@ RUN apt-get update && \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
-# Refresh font cache to recognize new fonts
+# Refresh font cache
 RUN fc-cache -f -v
 
-# 3. Install PHP Extensions (Imagick and Zip)
+# 3. Install PHP Extensions
 RUN pecl install imagick \
     && docker-php-ext-enable imagick \
     && docker-php-ext-install zip
@@ -46,23 +44,31 @@ RUN find /etc/ImageMagick* -name "policy.xml" -exec sed -i 's/rights="none" patt
 # 6. Set Working Directory
 WORKDIR /var/www/html
 
+# 7. 安装 Composer 二进制文件
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# 7. [Critical Fix] Permissions and Environment Setup
+# 8. 权限准备
 RUN mkdir -p /var/www/.config /var/www/.cache /var/www/html/temp_uploads && \
     chown -R www-data:www-data /var/www/ /var/www/html/ && \
     chmod -R 777 /tmp/
 
-# Force LibreOffice to use /var/www as its home to avoid permission errors
 ENV HOME=/var/www
 
-# 8. Apache Configuration and Code Deployment
-COPY . /var/www/html/
+# 9. 部署代码并安装依赖 (关键步骤)
+# 先只复制 composer 相关文件以利用 Docker 缓存
+COPY composer.json ./
+# 如果有 composer.lock 也建议复制: COPY composer.json composer.lock ./
 
+# 执行安装
 RUN composer install --no-interaction --optimize-autoloader --no-dev --ignore-platform-reqs
 
+# 复制其余所有代码
+COPY . /var/www/html/
+
+# 再次统一权限
 RUN chown -R www-data:www-data /var/www/html/
 
+# 10. Apache Configuration
 RUN a2enmod rewrite && \
     sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
 
