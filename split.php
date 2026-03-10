@@ -1,15 +1,15 @@
 <?php
-// 1. 环境初始化
+// 1. Environment Initialization
 ini_set('display_errors', 0); 
 error_reporting(E_ALL);
 ini_set('memory_limit', '1024M'); 
 set_time_limit(300);
 
-// 2. 引入 Composer
+// 2. Include Composer Autoloader
 $autoload = __DIR__ . '/vendor/autoload.php';
 if (!file_exists($autoload)) {
     header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'error' => 'Vendor 目录缺失，请运行 composer install']);
+    echo json_encode(['success' => false, 'error' => 'Vendor directory missing. Please ensure composer install ran inside the container.']);
     exit;
 }
 require $autoload;
@@ -18,12 +18,16 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Worksheet\PageSetup;
 
 if (isset($_FILES['excel_file'])) {
-    ob_start(); 
+    ob_start(); // Buffer output to prevent accidental whitespace
     header('Content-Type: application/json');
 
     try {
-        // --- 修正点 1：适配 Linux 临时目录 ---
-        $uploadDir = '/var/www/html/temp_uploads'; 
+        // --- Cross-Platform Path Handling ---
+        $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+        
+        // Automatically selects /tmp (Linux) or C:\Temp (Windows)
+        $uploadDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pdf_tool_simple';
+        
         if (!is_dir($uploadDir)) {
             mkdir($uploadDir, 0777, true);
         }
@@ -31,22 +35,23 @@ if (isset($_FILES['excel_file'])) {
         $file = $_FILES['excel_file'];
         $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
         $uniqueId = uniqid();
-        // 清理文件名中的特殊字符，防止 Shell 注入
-        $safeFileName = preg_replace('/[^a-zA-Z0-9._-]/', '_', $file['name']);
-        $tmpFilePath = $uploadDir . '/' . $uniqueId . '_' . $safeFileName;
+        $tmpFilePath = $uploadDir . DIRECTORY_SEPARATOR . $uniqueId . '_' . $file['name'];
 
         if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
-            throw new Exception("文件上传失败。");
+            throw new Exception("Failed to move uploaded file.");
         }
 
-        // --- 核心逻辑：Excel 强制缩放处理 ---
+        // --- Core Logic: Excel Force Scaling ---
         if (in_array($extension, ['xlsx', 'xls'])) {
             $spreadsheet = IOFactory::load($tmpFilePath);
             
             foreach ($spreadsheet->getAllSheets() as $sheet) {
                 $setup = $sheet->getPageSetup();
+                // Force Portrait Orientation
                 $setup->setOrientation(PageSetup::ORIENTATION_PORTRAIT);
+                // Scale to 1 Page Wide
                 $setup->setFitToWidth(1);
+                // Automatic Height Pagination (0)
                 $setup->setFitToHeight(0);
                 $setup->setFitToPage(true);
             }
@@ -55,30 +60,43 @@ if (isset($_FILES['excel_file'])) {
             $writer = IOFactory::createWriter($spreadsheet, $writerType);
             $writer->save($tmpFilePath);
             
+            // Free Memory
             if (method_exists($spreadsheet, 'dispose')) {
                 $spreadsheet->dispose();
             }
             unset($spreadsheet, $writer);
         }
 
-        // --- 修正点 2：适配 Linux 下 LibreOffice 路径及命令 ---
-        // Docker 中 libreoffice 直接在 PATH 中，命令名为 libreoffice 或 soffice
-        $sofficePath = 'libreoffice'; 
+        // --- LibreOffice Conversion Logic (Docker & Windows Compatible) ---
+        $sofficePath = $isWindows 
+            ? '"C:\Program Files\LibreOffice\program\soffice.exe"' 
+            : 'soffice'; // Direct command in Linux Docker
+
+        $userProfileDir = $uploadDir . DIRECTORY_SEPARATOR . 'profile_' . $uniqueId;
         
-        // Dockerfile 已设置 ENV HOME=/var/www，无需手动指定 UserInstallation
-        $cmd = "$sofficePath --headless --convert-to pdf --outdir " . escapeshellarg($uploadDir) . " " . escapeshellarg($tmpFilePath) . " 2>&1";
+        // UserInstallation path format differs between OS for LibreOffice
+        $userProfileUrl = $isWindows 
+            ? "file:///" . str_replace('\\', '/', $userProfileDir)
+            : "file://" . $userProfileDir;
+
+        // Construct the headless conversion command
+        $cmd = sprintf(
+            "%s \"-env:UserInstallation=%s\" --headless --convert-to pdf --outdir %s %s 2>&1",
+            $sofficePath,
+            $userProfileUrl,
+            escapeshellarg($uploadDir),
+            escapeshellarg($tmpFilePath)
+        );
 
         exec($cmd, $output, $returnVar);
 
         if ($returnVar === 0) {
             $pdfName = pathinfo($tmpFilePath, PATHINFO_FILENAME) . '.pdf';
-            $pdfPath = $uploadDir . '/' . $pdfName;
+            $pdfPath = $uploadDir . DIRECTORY_SEPARATOR . $pdfName;
 
             if (file_exists($pdfPath)) {
                 $base64 = base64_encode(file_get_contents($pdfPath));
-                @unlink($pdfPath); 
-                
-                // 清理 LibreOffice 可能产生的临时 profile 目录（如果有）
+                @unlink($pdfPath); // Clean up generated PDF
                 
                 ob_end_clean(); 
                 echo json_encode([
@@ -87,10 +105,10 @@ if (isset($_FILES['excel_file'])) {
                     'filename' => $file['name']
                 ]);
             } else {
-                throw new Exception("PDF 转换成功但未找到文件。命令行输出: " . implode("\n", $output));
+                throw new Exception("PDF conversion successful but file not found. Output: " . implode("\n", $output));
             }
         } else {
-            throw new Exception("LibreOffice 错误: " . implode("\n", $output));
+            throw new Exception("LibreOffice Error: " . implode("\n", $output));
         }
     } catch (Throwable $e) {
         if (ob_get_length()) ob_end_clean();
@@ -100,7 +118,9 @@ if (isset($_FILES['excel_file'])) {
         ]);
     }
 
+    // Final Cleanup of temporary source file
     if (isset($tmpFilePath) && file_exists($tmpFilePath)) @unlink($tmpFilePath);
+    
     exit;
 }
 ?>
@@ -840,6 +860,7 @@ if (isset($_FILES['excel_file'])) {
 
 
 </html>
+
 
 
 
