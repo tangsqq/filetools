@@ -18,17 +18,22 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Worksheet\PageSetup;
 
 if (isset($_FILES['excel_file'])) {
-    ob_start(); // 开启缓冲区，防止杂质输出
+    ob_start(); 
     header('Content-Type: application/json');
 
     try {
-        $uploadDir = 'C:/Windows/Temp/pdf_tool_simple';
-        if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
+        // --- 修正点 1：适配 Linux 临时目录 ---
+        $uploadDir = '/var/www/html/temp_uploads'; 
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0777, true);
+        }
 
         $file = $_FILES['excel_file'];
         $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
         $uniqueId = uniqid();
-        $tmpFilePath = $uploadDir . '/' . $uniqueId . '_' . $file['name'];
+        // 清理文件名中的特殊字符，防止 Shell 注入
+        $safeFileName = preg_replace('/[^a-zA-Z0-9._-]/', '_', $file['name']);
+        $tmpFilePath = $uploadDir . '/' . $uniqueId . '_' . $safeFileName;
 
         if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
             throw new Exception("文件上传失败。");
@@ -40,11 +45,8 @@ if (isset($_FILES['excel_file'])) {
             
             foreach ($spreadsheet->getAllSheets() as $sheet) {
                 $setup = $sheet->getPageSetup();
-                // 强制纵向
                 $setup->setOrientation(PageSetup::ORIENTATION_PORTRAIT);
-                // 强制所有列在一页宽
                 $setup->setFitToWidth(1);
-                // 高度自动分页 (0)
                 $setup->setFitToHeight(0);
                 $setup->setFitToPage(true);
             }
@@ -53,20 +55,18 @@ if (isset($_FILES['excel_file'])) {
             $writer = IOFactory::createWriter($spreadsheet, $writerType);
             $writer->save($tmpFilePath);
             
-            // --- 修正点：移除已失效的 disconnectCells() ---
-            // 在新版本中直接 unset 即可，或者使用 dispose()
             if (method_exists($spreadsheet, 'dispose')) {
                 $spreadsheet->dispose();
             }
             unset($spreadsheet, $writer);
         }
 
-        // --- LibreOffice 转换逻辑 ---
-        $sofficePath = '"C:\Program Files\LibreOffice\program\soffice.exe"';
-        $userProfileDir = $uploadDir . '/profile_' . $uniqueId;
-        $userProfile = 'file:///' . str_replace('\\', '/', $userProfileDir);
-
-        $cmd = "$sofficePath \"-env:UserInstallation=$userProfile\" --headless --convert-to pdf --outdir " . escapeshellarg($uploadDir) . " " . escapeshellarg($tmpFilePath) . " 2>&1";
+        // --- 修正点 2：适配 Linux 下 LibreOffice 路径及命令 ---
+        // Docker 中 libreoffice 直接在 PATH 中，命令名为 libreoffice 或 soffice
+        $sofficePath = 'libreoffice'; 
+        
+        // Dockerfile 已设置 ENV HOME=/var/www，无需手动指定 UserInstallation
+        $cmd = "$sofficePath --headless --convert-to pdf --outdir " . escapeshellarg($uploadDir) . " " . escapeshellarg($tmpFilePath) . " 2>&1";
 
         exec($cmd, $output, $returnVar);
 
@@ -78,14 +78,16 @@ if (isset($_FILES['excel_file'])) {
                 $base64 = base64_encode(file_get_contents($pdfPath));
                 @unlink($pdfPath); 
                 
-                ob_end_clean(); // 清理缓冲区
+                // 清理 LibreOffice 可能产生的临时 profile 目录（如果有）
+                
+                ob_end_clean(); 
                 echo json_encode([
                     'success' => true,
                     'pdf_base64' => $base64,
                     'filename' => $file['name']
                 ]);
             } else {
-                throw new Exception("PDF 转换成功但未找到文件。");
+                throw new Exception("PDF 转换成功但未找到文件。命令行输出: " . implode("\n", $output));
             }
         } else {
             throw new Exception("LibreOffice 错误: " . implode("\n", $output));
@@ -838,6 +840,7 @@ if (isset($_FILES['excel_file'])) {
 
 
 </html>
+
 
 
 
