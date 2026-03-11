@@ -81,8 +81,8 @@ if (isset($_FILES['excel_file'])) {
             '%s "-env:UserInstallation=file://%s" --headless --convert-to pdf --outdir %s %s 2>&1',
             $sofficePath,
             $userProfileDir,
-            escapeshellarg($uploadDir),
-            escapeshellarg($tmpFilePath)
+            escaphellarg($uploadDir),
+            escaphellarg($tmpFilePath)
         );
 
         exec($cmd, $output, $returnVar);
@@ -96,7 +96,8 @@ if (isset($_FILES['excel_file'])) {
                 
                 // 清理生成的 PDF 和配置文件目录
                 @unlink($pdfPath); 
-                $this->recursiveRemoveDir($userProfileDir);
+                // 已修复：去掉 $this->，直接调用全局函数
+                recursiveRemoveDir($userProfileDir);
                 
                 ob_end_clean(); 
                 echo json_encode([
@@ -876,4 +877,5 @@ function recursiveRemoveDir($dir) {
 </body>
 
 </html>
+
 
