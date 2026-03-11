@@ -1,31 +1,37 @@
 <?php
+/**
+ * Excel to PDF Converter (Docker & Windows Compatible)
+ */
+
 // 1. Environment Initialization
 ini_set('display_errors', 0); 
 error_reporting(E_ALL);
 ini_set('memory_limit', '1024M'); 
 set_time_limit(300);
 
-// 2. Include Composer Autoloader
+// 2. Load Composer Autoloader
 $autoload = __DIR__ . '/vendor/autoload.php';
 if (!file_exists($autoload)) {
     header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'error' => 'Vendor directory missing. Please ensure composer install ran inside the container.']);
+    echo json_encode(['success' => false, 'error' => 'Vendor directory missing. Run composer install inside the container.']);
     exit;
 }
 require $autoload;
 
+// Import required classes from PhpSpreadsheet
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Worksheet\PageSetup;
 
+// 3. Handle File Upload
 if (isset($_FILES['excel_file'])) {
-    ob_start(); // Buffer output to prevent accidental whitespace
+    ob_start(); 
     header('Content-Type: application/json');
 
     try {
-        // --- Cross-Platform Path Handling ---
+        // --- Detect Operating System ---
         $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
         
-        // Automatically selects /tmp (Linux) or C:\Temp (Windows)
+        // Use system temp directory (/tmp for Linux, C:\Temp for Windows)
         $uploadDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pdf_tool_simple';
         
         if (!is_dir($uploadDir)) {
@@ -38,21 +44,23 @@ if (isset($_FILES['excel_file'])) {
         $tmpFilePath = $uploadDir . DIRECTORY_SEPARATOR . $uniqueId . '_' . $file['name'];
 
         if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
-            throw new Exception("Failed to move uploaded file.");
+            throw new Exception("Failed to move uploaded file to temporary directory.");
         }
 
-        // --- Core Logic: Excel Force Scaling ---
+        // --- Step A: Excel Pre-processing (Force Scaling) ---
         if (in_array($extension, ['xlsx', 'xls'])) {
+            // Check if Spreadsheet library is loaded
+            if (!class_exists('PhpOffice\PhpSpreadsheet\IOFactory')) {
+                throw new Exception("PhpSpreadsheet library not found. Check your composer.json.");
+            }
+
             $spreadsheet = IOFactory::load($tmpFilePath);
             
             foreach ($spreadsheet->getAllSheets() as $sheet) {
                 $setup = $sheet->getPageSetup();
-                // Force Portrait Orientation
                 $setup->setOrientation(PageSetup::ORIENTATION_PORTRAIT);
-                // Scale to 1 Page Wide
-                $setup->setFitToWidth(1);
-                // Automatic Height Pagination (0)
-                $setup->setFitToHeight(0);
+                $setup->setFitToWidth(1);  // Force all columns on one page
+                $setup->setFitToHeight(0); // Allow multiple pages vertically
                 $setup->setFitToPage(true);
             }
             
@@ -60,26 +68,23 @@ if (isset($_FILES['excel_file'])) {
             $writer = IOFactory::createWriter($spreadsheet, $writerType);
             $writer->save($tmpFilePath);
             
-            // Free Memory
-            if (method_exists($spreadsheet, 'dispose')) {
-                $spreadsheet->dispose();
-            }
+            // Clean up memory immediately
+            $spreadsheet->disconnectCells(); 
             unset($spreadsheet, $writer);
         }
 
-        // --- LibreOffice Conversion Logic (Docker & Windows Compatible) ---
+        // --- Step B: LibreOffice Conversion ---
         $sofficePath = $isWindows 
             ? '"C:\Program Files\LibreOffice\program\soffice.exe"' 
-            : 'soffice'; // Direct command in Linux Docker
+            : 'soffice'; 
 
         $userProfileDir = $uploadDir . DIRECTORY_SEPARATOR . 'profile_' . $uniqueId;
         
-        // UserInstallation path format differs between OS for LibreOffice
+        // Fix for LibreOffice multi-user/headless environments
         $userProfileUrl = $isWindows 
             ? "file:///" . str_replace('\\', '/', $userProfileDir)
             : "file://" . $userProfileDir;
 
-        // Construct the headless conversion command
         $cmd = sprintf(
             "%s \"-env:UserInstallation=%s\" --headless --convert-to pdf --outdir %s %s 2>&1",
             $sofficePath,
@@ -96,7 +101,9 @@ if (isset($_FILES['excel_file'])) {
 
             if (file_exists($pdfPath)) {
                 $base64 = base64_encode(file_get_contents($pdfPath));
-                @unlink($pdfPath); // Clean up generated PDF
+                
+                // Cleanup: Delete the generated PDF after reading
+                @unlink($pdfPath); 
                 
                 ob_end_clean(); 
                 echo json_encode([
@@ -105,11 +112,12 @@ if (isset($_FILES['excel_file'])) {
                     'filename' => $file['name']
                 ]);
             } else {
-                throw new Exception("PDF conversion successful but file not found. Output: " . implode("\n", $output));
+                throw new Exception("Conversion reported success, but PDF was not found.");
             }
         } else {
-            throw new Exception("LibreOffice Error: " . implode("\n", $output));
+            throw new Exception("LibreOffice Error: " . implode(" ", $output));
         }
+
     } catch (Throwable $e) {
         if (ob_get_length()) ob_end_clean();
         echo json_encode([
@@ -118,8 +126,13 @@ if (isset($_FILES['excel_file'])) {
         ]);
     }
 
-    // Final Cleanup of temporary source file
+    // --- Step C: Final Cleanup ---
     if (isset($tmpFilePath) && file_exists($tmpFilePath)) @unlink($tmpFilePath);
+    
+    // Optional: Delete LibreOffice profile temp folder if it exists
+    if (isset($userProfileDir) && is_dir($userProfileDir)) {
+        $isWindows ? exec("rd /s /q " . escapeshellarg($userProfileDir)) : exec("rm -rf " . escapeshellarg($userProfileDir));
+    }
     
     exit;
 }
@@ -860,6 +873,7 @@ if (isset($_FILES['excel_file'])) {
 
 
 </html>
+
 
 
 
