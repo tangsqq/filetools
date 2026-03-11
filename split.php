@@ -77,12 +77,13 @@ if (isset($_FILES['excel_file'])) {
         if (!is_dir($userProfileDir)) mkdir($userProfileDir, 0777, true);
 
         // 构建命令：注意 Linux 下的 UserInstallation 格式
+        // 修复点：确保使用正确的 escapeshellarg 函数名
         $cmd = sprintf(
             '%s "-env:UserInstallation=file://%s" --headless --convert-to pdf --outdir %s %s 2>&1',
             $sofficePath,
             $userProfileDir,
-            escaphellarg($uploadDir),
-            escaphellarg($tmpFilePath)
+            escapeshellarg($uploadDir),
+            escapeshellarg($tmpFilePath)
         );
 
         exec($cmd, $output, $returnVar);
@@ -877,5 +878,6 @@ function recursiveRemoveDir($dir) {
 </body>
 
 </html>
+
 
 
