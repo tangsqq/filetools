@@ -1,4 +1,9 @@
 <?php
+/**
+ * PDF Reorder, Rotate & Split Tool
+ * Optimized for Render.com (Linux Docker)
+ */
+
 // 1. 环境初始化
 ini_set('display_errors', 0); 
 error_reporting(E_ALL);
@@ -9,7 +14,7 @@ set_time_limit(300);
 $autoload = __DIR__ . '/vendor/autoload.php';
 if (!file_exists($autoload)) {
     header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'error' => 'Vendor 目录缺失，请运行 composer install']);
+    echo json_encode(['success' => false, 'error' => 'Vendor 目录缺失，请确保 Docker 构建成功']);
     exit;
 }
 require $autoload;
@@ -18,12 +23,15 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Worksheet\PageSetup;
 
 if (isset($_FILES['excel_file'])) {
-    ob_start(); // 开启缓冲区，防止杂质输出
+    ob_start(); 
     header('Content-Type: application/json');
 
     try {
-        $uploadDir = 'C:/Windows/Temp/pdf_tool_simple';
-        if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
+        // --- 适配 Linux 的临时目录 ---
+        $uploadDir = __DIR__ . '/temp_uploads';
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0777, true);
+        }
 
         $file = $_FILES['excel_file'];
         $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
@@ -31,7 +39,7 @@ if (isset($_FILES['excel_file'])) {
         $tmpFilePath = $uploadDir . '/' . $uniqueId . '_' . $file['name'];
 
         if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
-            throw new Exception("文件上传失败。");
+            throw new Exception("文件保存失败。");
         }
 
         // --- 核心逻辑：Excel 强制缩放处理 ---
@@ -44,7 +52,7 @@ if (isset($_FILES['excel_file'])) {
                 $setup->setOrientation(PageSetup::ORIENTATION_PORTRAIT);
                 // 强制所有列在一页宽
                 $setup->setFitToWidth(1);
-                // 高度自动分页 (0)
+                // 高度自动分页
                 $setup->setFitToHeight(0);
                 $setup->setFitToPage(true);
             }
@@ -53,20 +61,29 @@ if (isset($_FILES['excel_file'])) {
             $writer = IOFactory::createWriter($spreadsheet, $writerType);
             $writer->save($tmpFilePath);
             
-            // --- 修正点：移除已失效的 disconnectCells() ---
-            // 在新版本中直接 unset 即可，或者使用 dispose()
+            // 显式释放内存
             if (method_exists($spreadsheet, 'dispose')) {
                 $spreadsheet->dispose();
             }
             unset($spreadsheet, $writer);
         }
 
-        // --- LibreOffice 转换逻辑 ---
-        $sofficePath = '"C:\Program Files\LibreOffice\program\soffice.exe"';
+        // --- LibreOffice 转换逻辑 (Linux 适配版) ---
+        // 在 Render Docker 中，直接调用 'libreoffice' 即可
+        $sofficePath = 'libreoffice'; 
+        
+        // 创建独立的用户配置目录，防止多用户并发冲突
         $userProfileDir = $uploadDir . '/profile_' . $uniqueId;
-        $userProfile = 'file:///' . str_replace('\\', '/', $userProfileDir);
+        if (!is_dir($userProfileDir)) mkdir($userProfileDir, 0777, true);
 
-        $cmd = "$sofficePath \"-env:UserInstallation=$userProfile\" --headless --convert-to pdf --outdir " . escapeshellarg($uploadDir) . " " . escapeshellarg($tmpFilePath) . " 2>&1";
+        // 构建命令：注意 Linux 下的 UserInstallation 格式
+        $cmd = sprintf(
+            '%s "-env:UserInstallation=file://%s" --headless --convert-to pdf --outdir %s %s 2>&1',
+            $sofficePath,
+            $userProfileDir,
+            escapeshellarg($uploadDir),
+            escapeshellarg($tmpFilePath)
+        );
 
         exec($cmd, $output, $returnVar);
 
@@ -76,19 +93,22 @@ if (isset($_FILES['excel_file'])) {
 
             if (file_exists($pdfPath)) {
                 $base64 = base64_encode(file_get_contents($pdfPath));
-                @unlink($pdfPath); 
                 
-                ob_end_clean(); // 清理缓冲区
+                // 清理生成的 PDF 和配置文件目录
+                @unlink($pdfPath); 
+                $this->recursiveRemoveDir($userProfileDir);
+                
+                ob_end_clean(); 
                 echo json_encode([
                     'success' => true,
                     'pdf_base64' => $base64,
                     'filename' => $file['name']
                 ]);
             } else {
-                throw new Exception("PDF 转换成功但未找到文件。");
+                throw new Exception("PDF 转换成功但未找到输出文件。");
             }
         } else {
-            throw new Exception("LibreOffice 错误: " . implode("\n", $output));
+            throw new Exception("LibreOffice 错误 (Code $returnVar): " . implode("\n", $output));
         }
     } catch (Throwable $e) {
         if (ob_get_length()) ob_end_clean();
@@ -98,8 +118,27 @@ if (isset($_FILES['excel_file'])) {
         ]);
     }
 
+    // 最终清理原始上传文件
     if (isset($tmpFilePath) && file_exists($tmpFilePath)) @unlink($tmpFilePath);
     exit;
+}
+
+/**
+ * 辅助函数：递归删除目录（用于清理 LibreOffice 配置文件）
+ */
+function recursiveRemoveDir($dir) {
+    if (is_dir($dir)) {
+        $objects = scandir($dir);
+        foreach ($objects as $object) {
+            if ($object != "." && $object != "..") {
+                if (is_dir($dir . DIRECTORY_SEPARATOR . $object))
+                    recursiveRemoveDir($dir . DIRECTORY_SEPARATOR . $object);
+                else
+                    unlink($dir . DIRECTORY_SEPARATOR . $object);
+            }
+        }
+        rmdir($dir);
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -837,3 +876,4 @@ if (isset($_FILES['excel_file'])) {
 </body>
 
 </html>
+
