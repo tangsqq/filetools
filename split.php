@@ -334,7 +334,7 @@ if (isset($_FILES['excel_file'])) {
         .drop-hint {
             grid-column: 1 / -1;
             text-align: center;
-            color: #94a3b8;
+            color: var(--primary, #94a3b8);
             padding-top: 150px;
             pointer-events: none;
         }
@@ -343,6 +343,7 @@ if (isset($_FILES['excel_file'])) {
             font-size: 50px;
             margin-bottom: 15px;
             display: block;
+            color: var(--primary, #94a3b8);
         }
 
         /* Show segment header only when split is active on previous card */
