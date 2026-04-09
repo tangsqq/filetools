@@ -1,10 +1,6 @@
 <?php
 
-/**
- * Advanced PDF/Image/Office Conversion Tool (Optimized for LibreOffice PDF to Word)
- */
-
-// 引入 Composer 自动加载
+// Load Composer libraries
 if (file_exists('vendor/autoload.php')) {
     require 'vendor/autoload.php';
 }
@@ -12,21 +8,24 @@ if (file_exists('vendor/autoload.php')) {
 use Smalot\PdfParser\Parser;
 use PhpOffice\PhpWord\PhpWord;
 use PhpOffice\PhpWord\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
-// --- 路径兼容性处理 ---
+// Set up paths for different operating systems 
 if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-    // Windows 路径
+    // Windows paths
     $magickPath = 'C:\Program Files\ImageMagick-7.1.2-Q16';
     $gsPath = 'C:\Program Files\gs\gs10.04.1\bin';
     $libreOfficePath = '"C:\Program Files\LibreOffice\program\soffice.exe"';
     putenv("PATH=" . getenv('PATH') . ";" . $magickPath . ";" . $gsPath);
 } else {
-    // Docker / Linux 路径
+    // Linux or Docker paths
     $libreOfficePath = 'libreoffice';
     putenv('HOME=/tmp');
 }
 
-// 辅助函数：递归删除目录（用于清理 LibreOffice 产生的配置环境）
+// Delete folders 
 function recursiveRemoveDir($dir)
 {
     if (is_dir($dir)) {
@@ -60,7 +59,7 @@ if (isset($_POST["submit"])) {
         try {
             $outDir = sys_get_temp_dir();
 
-            // --- Office 相关转换逻辑 (Excel/Word to PDF) ---
+            // Office conversion logic
             $officeExtensions = ['doc', 'docx', 'xls', 'xlsx'];
             if (in_array($extension, $officeExtensions) && $targetFormat === 'pdf') {
                 $cmd = "$libreOfficePath --headless --convert-to pdf --outdir " . escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
@@ -77,42 +76,93 @@ if (isset($_POST["submit"])) {
                 exit;
             }
 
-            // --- PDF to Word (使用 LibreOffice 优化指令) ---
-            elseif ($extension === 'pdf' && $targetFormat === 'docx') {
-                // 为防止 LibreOffice 报错，创建一个临时的 UserProfile 环境
-                $uniqueId = uniqid();
-                $tempUserDir = $outDir . DIRECTORY_SEPARATOR . "lo_profile_" . $uniqueId;
-                if (!is_dir($tempUserDir)) @mkdir($tempUserDir);
+            // PDF to Word, PPTX or XLSX
+            elseif ($extension === 'pdf' && ($targetFormat === 'docx' || $targetFormat === 'pptx' || $targetFormat === 'xlsx')) {
 
-                // 强制指定过滤器 writer_pdf_import 可以更好地处理 PDF 里的图片和文本框
-                // 注意 Windows 路径下 file:/// 协议的特殊处理
-                $loUserPath = "file:///" . str_replace("\\", "/", $tempUserDir);
+                $convertedFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($tempFile, PATHINFO_FILENAME) . '.' . $targetFormat;
 
-                $cmd = "$libreOfficePath -env:UserInstallation=" . escapeshellarg($loUserPath) .
-                    " --headless --infilter=\"writer_pdf_import\" --convert-to docx --outdir " .
-                    escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
+                if ($targetFormat === 'xlsx') {
+                    // Initialize PDF Parser and extract text
+                    $parser = new Parser();
+                    $pdf = $parser->parseFile($tempFile);
+                    $text = $pdf->getText();
 
-                shell_exec($cmd);
+                    $spreadsheet = new Spreadsheet();
+                    $sheet = $spreadsheet->getActiveSheet();
 
-                $convertedFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($tempFile, PATHINFO_FILENAME) . '.docx';
+                    $lines = explode("\n", $text);
+                    $row = 1;
 
-                if (!file_exists($convertedFile)) {
+                    // Loop through each line and insert data into cells
+                    foreach ($lines as $line) {
+                        $line = trim($line);
+                        if (empty($line)) continue;
+
+                        // Split by 1 or more spaces or tabs to identify columns
+                        $columns = preg_split('/\s{1,}|\t/', $line);
+
+                        $col = 1;
+                        foreach ($columns as $cellData) {
+                            // Get the Column Letter based on numeric index
+                            $colLetter = Coordinate::stringFromColumnIndex($col);
+                            $sheet->setCellValue($colLetter . $row, $cellData);
+                            $col++;
+                        }
+                        $row++;
+                    }
+
+                    // Auto-size column widths based on content
+                    $highestColumn = $sheet->getHighestColumn();
+                    $highestColumnIndex = Coordinate::columnIndexFromString($highestColumn);
+
+                    for ($i = 1; $i <= $highestColumnIndex; $i++) {
+                        $colLetter = Coordinate::stringFromColumnIndex($i);
+                        $sheet->getColumnDimension($colLetter)->setAutoSize(true);
+                    }
+
+                    // Save the generated Excel file
+                    $writer = new Xlsx($spreadsheet);
+                    $writer->save($convertedFile);
+                } else {
+                    // Use LibreOffice for Word and PPTX
+                    $uniqueId = uniqid();
+                    $tempUserDir = $outDir . DIRECTORY_SEPARATOR . "lo_profile_" . $uniqueId;
+                    if (!is_dir($tempUserDir)) @mkdir($tempUserDir);
+                    $loUserPath = "file:///" . str_replace("\\", "/", $tempUserDir);
+
+                    $filter = ($targetFormat === 'docx') ? "writer_pdf_import" : "impress_pdf_import";
+
+                    $cmd = "$libreOfficePath -env:UserInstallation=" . escapeshellarg($loUserPath) .
+                        " --headless --infilter=\"$filter\" --convert-to $targetFormat --outdir " .
+                        escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
+
+                    shell_exec($cmd);
                     recursiveRemoveDir($tempUserDir);
-                    throw new Exception("LibreOffice failed to convert PDF to DOCX. Please check if the PDF is protected.");
                 }
 
-                header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-                header('Content-Disposition: attachment; filename="' . pathinfo($originalName, PATHINFO_FILENAME) . '.docx"');
+                if (!file_exists($convertedFile)) {
+                    throw new Exception("Conversion to " . strtoupper($targetFormat) . " failed.");
+                }
+
+                // Set headers
+                if ($targetFormat === 'docx') {
+                    $contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                } elseif ($targetFormat === 'pptx') {
+                    $contentType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+                } else {
+                    $contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                }
+
+                header('Content-Type: ' . $contentType);
+                header('Content-Disposition: attachment; filename="' . pathinfo($originalName, PATHINFO_FILENAME) . '.' . $targetFormat . '"');
                 setcookie("fileDownload", "true", time() + 30, "/");
                 readfile($convertedFile);
 
-                // 清理工作
                 @unlink($convertedFile);
-                recursiveRemoveDir($tempUserDir);
                 exit;
             }
 
-            // --- Imagick 相关逻辑 (保持不变) ---
+            // Imagick logic for image conversion 
             if (!class_exists('Imagick')) {
                 throw new Exception("Imagick not installed.");
             }
@@ -371,8 +421,13 @@ if (isset($_POST["submit"])) {
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         .home-btn {
@@ -402,8 +457,11 @@ if (isset($_POST["submit"])) {
         .modal-overlay {
             display: none;
             position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5);
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(4px);
             z-index: 10001;
             justify-content: center;
@@ -441,8 +499,8 @@ if (isset($_POST["submit"])) {
                 <select name="targetFormat">
                     <option value="pdf">PDF (.pdf)</option>
                     <option value="docx">Word (.docx)</option>
-                    <option value="jpg">JPG (.jpg)</option>
-                    <option value="png">PNG (.png)</option>
+                    <option value="pptx">PowerPoint (.pptx)</option>
+                    <option value="xlsx">Excel (.xlsx)</option>
                 </select>
             </div>
             <input type="submit" value="Convert" name="submit">
@@ -470,7 +528,6 @@ if (isset($_POST["submit"])) {
     </div>
 
     <script>
-        // Custom Alert Functions
         function showAlert(message, title = "Status") {
             document.getElementById('alertTitle').innerText = title;
             document.getElementById('alertMessage').innerText = message;
@@ -481,7 +538,6 @@ if (isset($_POST["submit"])) {
             document.getElementById('customAlert').style.display = 'none';
         }
 
-        // 显示选中文件名
         document.getElementById('fileToUpload').onchange = function() {
             if (this.files && this.files.length > 0) {
                 document.getElementById('file-name-text').innerText = this.files[0].name;
@@ -489,7 +545,6 @@ if (isset($_POST["submit"])) {
         };
 
         document.getElementById('convertForm').onsubmit = function() {
-            // 验证是否已选文件
             if (document.getElementById('fileToUpload').files.length === 0) {
                 showAlert("Please select a file first.", "Notice");
                 return false;
@@ -509,4 +564,3 @@ if (isset($_POST["submit"])) {
 </body>
 
 </html>
-

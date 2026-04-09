@@ -1,20 +1,22 @@
 <?php
-/**
- * PDF Reorder, Rotate & Split Tool
- * Optimized for Render.com (Linux Docker)
- */
-
-// 1. 环境初始化
-ini_set('display_errors', 0); 
+// Setup environment
+ini_set('display_errors', 0);
 error_reporting(E_ALL);
-ini_set('memory_limit', '1024M'); 
+ini_set('memory_limit', '1024M');
 set_time_limit(300);
 
-// 2. 引入 Composer
+// Folder config
+$uploadDir = __DIR__ . '/temp_local';
+if (!is_dir($uploadDir)) {
+    mkdir($uploadDir, 0777, true);
+    file_put_contents($uploadDir . '/.htaccess', "Deny from all");
+}
+
+// Get Composer
 $autoload = __DIR__ . '/vendor/autoload.php';
 if (!file_exists($autoload)) {
     header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'error' => 'Vendor 目录缺失，请确保 Docker 构建成功']);
+    echo json_encode(['success' => false, 'error' => 'Composer require phpoffice/phpspreadsheet']);
     exit;
 }
 require $autoload;
@@ -23,124 +25,63 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Worksheet\PageSetup;
 
 if (isset($_FILES['excel_file'])) {
-    ob_start(); 
+    ob_start();
     header('Content-Type: application/json');
 
     try {
-        // --- 适配 Linux 的临时目录 ---
-        $uploadDir = __DIR__ . '/temp_uploads';
-        if (!is_dir($uploadDir)) {
-            mkdir($uploadDir, 0777, true);
-        }
-
         $file = $_FILES['excel_file'];
         $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
         $uniqueId = uniqid();
         $tmpFilePath = $uploadDir . '/' . $uniqueId . '_' . $file['name'];
 
         if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
-            throw new Exception("文件保存失败。");
+            throw new Exception("Upload file fail.");
         }
 
-        // --- 核心逻辑：Excel 强制缩放处理 ---
         if (in_array($extension, ['xlsx', 'xls'])) {
             $spreadsheet = IOFactory::load($tmpFilePath);
-            
             foreach ($spreadsheet->getAllSheets() as $sheet) {
                 $setup = $sheet->getPageSetup();
-                // 强制纵向
                 $setup->setOrientation(PageSetup::ORIENTATION_PORTRAIT);
-                // 强制所有列在一页宽
                 $setup->setFitToWidth(1);
-                // 高度自动分页
                 $setup->setFitToHeight(0);
                 $setup->setFitToPage(true);
             }
-            
             $writerType = ($extension === 'xls') ? 'Xls' : 'Xlsx';
             $writer = IOFactory::createWriter($spreadsheet, $writerType);
             $writer->save($tmpFilePath);
-            
-            // 显式释放内存
-            if (method_exists($spreadsheet, 'dispose')) {
-                $spreadsheet->dispose();
-            }
             unset($spreadsheet, $writer);
         }
 
-        // --- LibreOffice 转换逻辑 (Linux 适配版) ---
-        // 在 Render Docker 中，直接调用 'libreoffice' 即可
-        $sofficePath = 'libreoffice'; 
-        
-        // 创建独立的用户配置目录，防止多用户并发冲突
+        $sofficePath = '"C:\Program Files\LibreOffice\program\soffice.exe"';
         $userProfileDir = $uploadDir . '/profile_' . $uniqueId;
-        if (!is_dir($userProfileDir)) mkdir($userProfileDir, 0777, true);
+        $userProfile = 'file:///' . str_replace('\\', '/', $userProfileDir);
 
-        // 构建命令：注意 Linux 下的 UserInstallation 格式
-        // 修复点：确保使用正确的 escapeshellarg 函数名
-        $cmd = sprintf(
-            '%s "-env:UserInstallation=file://%s" --headless --convert-to pdf --outdir %s %s 2>&1',
-            $sofficePath,
-            $userProfileDir,
-            escapeshellarg($uploadDir),
-            escapeshellarg($tmpFilePath)
-        );
-
+        $cmd = "$sofficePath \"-env:UserInstallation=$userProfile\" --headless --convert-to pdf --outdir " . escapeshellarg($uploadDir) . " " . escapeshellarg($tmpFilePath) . " 2>&1";
         exec($cmd, $output, $returnVar);
 
         if ($returnVar === 0) {
             $pdfName = pathinfo($tmpFilePath, PATHINFO_FILENAME) . '.pdf';
             $pdfPath = $uploadDir . '/' . $pdfName;
-
             if (file_exists($pdfPath)) {
                 $base64 = base64_encode(file_get_contents($pdfPath));
-                
-                // 清理生成的 PDF 和配置文件目录
-                @unlink($pdfPath); 
-                // 已修复：去掉 $this->，直接调用全局函数
-                recursiveRemoveDir($userProfileDir);
-                
-                ob_end_clean(); 
-                echo json_encode([
-                    'success' => true,
-                    'pdf_base64' => $base64,
-                    'filename' => $file['name']
-                ]);
+                @unlink($pdfPath);
+                ob_end_clean();
+                echo json_encode(['success' => true, 'pdf_base64' => $base64, 'filename' => $file['name']]);
             } else {
-                throw new Exception("PDF 转换成功但未找到输出文件。");
+                throw new Exception("PDF convert successfully but can't find file.");
             }
         } else {
-            throw new Exception("LibreOffice 错误 (Code $returnVar): " . implode("\n", $output));
+            throw new Exception("LibreOffice error: " . implode("\n", $output));
         }
     } catch (Throwable $e) {
-        if (ob_get_length()) ob_end_clean();
-        echo json_encode([
-            'success' => false,
-            'error' => $e->getMessage()
-        ]);
+        if (ob_get_length())
+            ob_end_clean();
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
     }
-
-    // 最终清理原始上传文件
-    if (isset($tmpFilePath) && file_exists($tmpFilePath)) @unlink($tmpFilePath);
+    if (isset($tmpFilePath) && file_exists($tmpFilePath))
+        @unlink($tmpFilePath);
     exit;
-}
-
-/**
- * 辅助函数：递归删除目录（用于清理 LibreOffice 配置文件）
- */
-function recursiveRemoveDir($dir) {
-    if (is_dir($dir)) {
-        $objects = scandir($dir);
-        foreach ($objects as $object) {
-            if ($object != "." && $object != "..") {
-                if (is_dir($dir . DIRECTORY_SEPARATOR . $object))
-                    recursiveRemoveDir($dir . DIRECTORY_SEPARATOR . $object);
-                else
-                    unlink($dir . DIRECTORY_SEPARATOR . $object);
-            }
-        }
-        rmdir($dir);
-    }
 }
 ?>
 <!DOCTYPE html>
@@ -148,7 +89,8 @@ function recursiveRemoveDir($dir) {
 
 <head>
     <meta charset="UTF-8">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📑</text></svg>">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📑</text></svg>">
     <title>PDF Reorder, Rotate & Split</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
@@ -157,8 +99,10 @@ function recursiveRemoveDir($dir) {
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         :root {
-            --primary: #2563eb;
-            --primary-hover: #1d4ed8;
+            --primary: #1e293b;
+            --primary-hover: #334155;
+            --h2-start: #1e293b;
+            --h2-end: #334155;
             --split: #f87171;
             --bg: #f8fafc;
             --card-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
@@ -175,6 +119,35 @@ function recursiveRemoveDir($dir) {
             min-height: 100vh;
         }
 
+        /* Pink Theme */
+        body[data-theme="pink"] {
+            --primary: #ec4899;
+            --primary-hover: #f1d6e2;
+            --h2-start: #ec4899;
+            --h2-end: #f1d6e2;
+            --btn-shadow: rgba(236, 72, 153, 0.2);
+        }
+
+        body[data-theme="pink"] .btn-main {
+            background: var(--primary) !important;
+        }
+
+        body[data-theme="pink"] .setup-card h2 {
+            background: var(--primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .btn-primary {
+            background: var(--primary) !important;
+            box-shadow: 0 4px 12px var(--btn-shadow) !important;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover) !important;
+        }
+
         .setup-card {
             background: rgba(255, 255, 255, 0.9);
             backdrop-filter: blur(10px);
@@ -184,17 +157,102 @@ function recursiveRemoveDir($dir) {
             text-align: center;
             max-width: 800px;
             margin: 0 auto 40px;
-            border: 1px solid #000;
+            border: 1px solid var(--primary);
+            position: relative;
+        }
+
+        .theme-switcher {
+            display: flex;
+            gap: 8px;
+        }
+
+        .help-icon {
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 10;
+        }
+
+        .help-icon:hover {
+            color: var(--primary);
+            transform: scale(1.2) rotate(15deg);
+        }
+
+        @keyframes modalShow {
+            from {
+                opacity: 0;
+                transform: scale(0.9) translateY(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        @keyframes modalHide {
+            from {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            to {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(4px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            transition: opacity 0.3s ease;
+        }
+
+        .modal-animating {
+            animation: modalShow 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        }
+
+        .modal-closing {
+            animation: modalHide 0.2s ease-in forwards;
+        }
+
+        #help-content {
+            text-align: left;
+            font-size: 14px;
+            line-height: 1.6;
+            padding: 10px 5px;
+        }
+
+        #help-content ul {
+            text-align: left;
+            margin: 10px 0 0 0;
+            padding-left: 0;
+            list-style-type: none;
+        }
+
+        #help-content li {
+            margin-bottom: 10px;
         }
 
         .setup-card h2 {
-            margin: 0 0 10px 0;
+            margin: 0 0 30px 0;
             font-weight: 800;
             letter-spacing: -0.025em;
-            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            background: var(--primary);
             -webkit-background-clip: text;
             background-clip: text;
             -webkit-text-fill-color: transparent;
+            transition: all 0.3s ease;
         }
 
         .btn {
@@ -213,27 +271,27 @@ function recursiveRemoveDir($dir) {
         }
 
         .btn-main {
-            background: black;
+            background: var(--primary) !important;
             color: white;
             border-radius: 20px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            box-shadow: 0 4px 12px var(--btn-shadow);
         }
 
         .btn-main:hover {
-            background: #334155;
+            background: var(--primary-hover, #334155);
             transform: translateY(-1px);
         }
 
         .btn-clear {
             background: #fff;
-            color: #64748b;
-            border: 1px solid #e2e8f0;
+            color: var(--primary, #64748b);
+            border: 1px solid var(--primary, #e2e8f0);
             border-radius: 20px;
         }
 
         .btn-clear:hover {
-            background: #f1f5f9;
-            color: #0f172a;
+            background: var(--bg);
+            opacity: 0.8;
         }
 
         #file-selector {
@@ -244,8 +302,8 @@ function recursiveRemoveDir($dir) {
             padding: 10px 24px;
             border-radius: 20px;
             background: #f1f5f9;
-            color: #475569;
-            border: 1px solid #e2e8f0;
+            color: var(--primary, #475569);
+            border: 1px solid var(--primary, #e2e8f0);
             cursor: pointer;
             font-weight: 600;
             font-size: 14px;
@@ -269,6 +327,8 @@ function recursiveRemoveDir($dir) {
             max-width: 1200px;
             margin: 0 auto;
             position: relative;
+            counter-reset: page-counter;
+            /* Use CSS counter for numbering */
         }
 
         .drop-hint {
@@ -285,9 +345,11 @@ function recursiveRemoveDir($dir) {
             display: block;
         }
 
+        /* Show segment header only when split is active on previous card */
         .segment-header {
             grid-column: 1 / -1;
-            display: flex;
+            display: none;
+            /* Hide by default */
             align-items: center;
             gap: 12px;
             background: white;
@@ -295,6 +357,15 @@ function recursiveRemoveDir($dir) {
             border-radius: 18px;
             margin-top: 15px;
             border: 1px solid #e2e8f0;
+        }
+
+        .segment-header.force-show {
+            display: flex;
+        }
+
+        /* Trigger header display */
+        .page-card.split-active+.segment-header {
+            display: flex;
         }
 
         .rename-input {
@@ -314,7 +385,7 @@ function recursiveRemoveDir($dir) {
             padding: 12px;
             cursor: grab;
             position: relative;
-            transition: all 0.3s ease;
+            transition: border-color 0.3s, transform 0.3s;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
             user-select: none;
         }
@@ -322,6 +393,12 @@ function recursiveRemoveDir($dir) {
         .page-card:hover {
             border-color: var(--primary);
             transform: translateY(-5px);
+        }
+
+        .page-card.selected {
+            border: 2px solid var(--primary);
+            background: #eff6ff;
+            box-shadow: 0 0 15px rgba(37, 99, 235, 0.2);
         }
 
         canvas {
@@ -337,13 +414,20 @@ function recursiveRemoveDir($dir) {
             position: absolute;
             top: -12px;
             left: 12px;
-            background: #1e293b;
+            background: var(--primary);
             color: white;
             padding: 4px 10px;
             border-radius: 20px;
             font-size: 11px;
             font-weight: 700;
             z-index: 5;
+            transition: background 0.3s ease;
+        }
+
+        /* Auto-generate page number badge */
+        .badge::after {
+            counter-increment: page-counter;
+            content: "#" counter(page-counter);
         }
 
         .rotate-btn {
@@ -351,7 +435,7 @@ function recursiveRemoveDir($dir) {
             bottom: 35px;
             right: 18px;
             border: 1px solid #e2e8f0;
-            border-radius: 10px;
+            border-radius: 50%;
             width: 32px;
             height: 32px;
             cursor: pointer;
@@ -360,6 +444,11 @@ function recursiveRemoveDir($dir) {
             justify-content: center;
             z-index: 10;
             background: white;
+            color: var(--primary);
+        }
+
+        .rotate-btn:hover {
+            border-color: var(--primary, #1e293b);
         }
 
         .delete-btn {
@@ -395,6 +484,7 @@ function recursiveRemoveDir($dir) {
             top: 50%;
             transform: translateY(-50%);
             background: white;
+            border-radius: 50%;
             padding: 2px;
         }
 
@@ -412,7 +502,6 @@ function recursiveRemoveDir($dir) {
             z-index: 9999;
         }
 
-        /* --- Updated Preview Styles --- */
         #previewModal {
             background: rgba(0, 0, 0, 0.95);
             overflow: hidden;
@@ -425,7 +514,6 @@ function recursiveRemoveDir($dir) {
             cursor: grab;
             user-select: none;
             transition: transform 0.1s ease-out;
-            /* Smooth zoom transition */
         }
 
         #previewImage:active {
@@ -467,40 +555,53 @@ function recursiveRemoveDir($dir) {
             position: fixed;
             top: 20px;
             right: 20px;
-            color: #1e293b;
-            font-size: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            color: var(--primary, #1e293b);
             text-decoration: none;
             transition: all 0.3s ease;
-            z-index: 10000;
+            z-index: 100;
         }
 
         .home-btn:hover {
             transform: scale(1.1);
-            color: lightgray;
+            color: var(--primary-hover);
         }
 
         .home-btn i {
             font-size: 30px;
+        }
+
+        .top-right-controls {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            z-index: 10;
         }
     </style>
 </head>
 
 <body>
     <div class="setup-card">
+        <div class="top-right-controls">
+            <div class="theme-switcher">
+                <button onclick="setTheme('default')" title="Default Theme" style="background:#1e293b; width:16px; height:16px; border-radius:50%; border:2px solid #fff; cursor:pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></button>
+                <button onclick="setTheme('pink')" title="Pink Theme" style="background:#ec4899; width:16px; height:16px; border-radius:50%; border:2px solid #fff; cursor:pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></button>
+            </div>
+            <i class="fa-regular fa-circle-question help-icon" title="How to use" onclick="showHelp()"></i>
+        </div>
         <h2>PDF Reorder, Rotate & Split</h2>
-        <p>Right-Click: Split | Scroll: Zoom | Drag Image: Move | Drag Card: Reorder</p>
-
         <div style="display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;">
-            <label for="file-selector" class="file-upload-label">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <label for="file-selector" class="file-upload-label" style="border-color: var(--primary); color: var(--primary);">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                 </svg>
                 Choose Files
             </label>
-            <input type="file" id="file-selector" accept="application/pdf, .xlsx, .xls, .doc, .docx, .ppt, .pptx, .jpg, .jpeg, .png" multiple>
+            <input type="file" id="file-selector"
+                accept="application/pdf, .xlsx, .xls, .doc, .docx, .ppt, .pptx, .jpg, .jpeg, .png" multiple>
             <button class="btn btn-main" onclick="exportPDF()">Download All</button>
             <button class="btn btn-clear" onclick="location.reload()">Clear All</button>
         </div>
@@ -511,7 +612,8 @@ function recursiveRemoveDir($dir) {
     </div>
 
     <div id="customAlert" class="modal-overlay">
-        <div style="background: white; padding: 32px; border-radius: 25px; text-align: center; max-width: 360px; width: 90%;">
+        <div
+            style="background: white; padding: 32px; border-radius: 25px; text-align: center; max-width: 360px; width: 90%;">
             <h3 id="alertTitle">Status</h3>
             <p id="alertMessage"></p>
             <button class="btn btn-main" id="alertBtn" onclick="closeAlert()">OK</button>
@@ -519,9 +621,11 @@ function recursiveRemoveDir($dir) {
     </div>
 
     <div id="previewModal" class="modal-overlay" onclick="closePreview()">
-        <button class="nav-arrow" id="prevArrow" onclick="navigatePreview(-1, event)"><i class="fa fa-chevron-left"></i></button>
+        <button class="nav-arrow" id="prevArrow" onclick="navigatePreview(-1, event)"><i
+                class="fa fa-chevron-left"></i></button>
         <img id="previewImage" src="" onclick="event.stopPropagation()">
-        <button class="nav-arrow" id="nextArrow" onclick="navigatePreview(1, event)"><i class="fa fa-chevron-right"></i></button>
+        <button class="nav-arrow" id="nextArrow" onclick="navigatePreview(1, event)"><i
+                class="fa fa-chevron-right"></i></button>
     </div>
 
     <a href="index.html" class="home-btn" title="Back to Home"><i class="fa fa-home"></i></a>
@@ -538,15 +642,83 @@ function recursiveRemoveDir($dir) {
         let state = {
             pageOrder: [],
             splits: new Set(),
-            segmentNames: {}
+            segmentNames: {},
+            selectedIndices: new Set()
         };
-
-        // Zoom & Drag State
-        let zoomLevel = 1;
-        let isDragging = false;
-        let startX, startY;
-        let translateX = 0,
+        let zoomLevel = 1,
+            isDragging = false,
+            startX, startY, translateX = 0,
             translateY = 0;
+
+        // Theme switching logic
+        function setTheme(theme) {
+            if (theme === 'pink') {
+                document.body.setAttribute('data-theme', 'pink');
+                localStorage.setItem('selected-theme', 'pink');
+            } else {
+                document.body.removeAttribute('data-theme');
+                localStorage.setItem('selected-theme', 'default');
+            }
+        }
+
+        // Apply saved theme on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedTheme = localStorage.getItem('selected-theme');
+            if (savedTheme === 'pink') setTheme('pink');
+        });
+
+        function showHelp() {
+            const helpText = `
+            <div id="help-content">
+                <strong>Main Features:</strong>
+                <ul>
+                    <li><strong>Upload:</strong> Supports PDF, Office (Word, Excel, PPT), and Images. Non-pdf will automatically convert to PDF.</li>
+                    <li><strong>Reorder:</strong> Drag and drop pages to change page sequence. Multi-select with Ctrl + Click.</li>
+                    <li><strong>Delete:</strong> Delete unwanted pages.</li>
+                    <li><strong>Rotate:</strong> Click the rotate icon on any page card.</li>
+                    <li><strong>Split:</strong> Right-click to split.</li>
+                    <li><strong>Merge:</strong> Merge pages or files from multiple documents into one file.</li>
+                    <li><strong>Preview:</strong> Left-click to preview. Scroll to zoom in and out, drag to move around.</li>
+                    <li><strong>Rename:</strong> Enter custom names for each split segment in the input fields.</li>
+                    <li><strong>Download:</strong> Download individual segments or "Download All" as a ZIP file.</li>
+                </ul>
+            </div>
+        `;
+
+            const alertModal = document.getElementById('customAlert');
+            const modalContent = alertModal.querySelector('div');
+
+            document.getElementById('alertTitle').innerText = "How to Use";
+            document.getElementById('alertMessage').innerHTML = helpText; // Use innerHTML for the list
+
+            // Adjust alert width for better reading
+            modalContent.style.maxWidth = "500px";
+
+            // Trigger animation
+            alertModal.style.display = 'flex';
+            modalContent.classList.remove('modal-closing');
+            modalContent.classList.add('modal-animating');
+        }
+
+        function closeAlert() {
+            const alertModal = document.getElementById('customAlert');
+            const modalContainer = alertModal.querySelector('div');
+
+            modalContainer.classList.remove('modal-animating');
+            modalContainer.classList.add('modal-closing');
+
+            setTimeout(() => {
+                alertModal.style.display = 'none';
+                modalContainer.classList.remove('modal-closing');
+
+                document.getElementById('alertTitle').innerText = "Status";
+                modalContainer.style.maxWidth = "360px";
+            }, 200);
+        }
+
+        function generateFileId() {
+            return Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+        }
 
         function cloneBuffer(buffer) {
             const dst = new ArrayBuffer(buffer.byteLength);
@@ -565,18 +737,27 @@ function recursiveRemoveDir($dir) {
 
         workspace.addEventListener('drop', (e) => {
             const files = e.dataTransfer.files;
-            if (files.length > 0) handleFiles(Array.from(files));
+            if (files.length > 0) {
+                // If dropping directly on workspace (hint area), append to end
+                if (e.target === workspace || e.target.id === 'drop-hint') {
+                    handleFiles(Array.from(files));
+                }
+            }
         });
 
         document.getElementById('file-selector').addEventListener('change', (e) => {
             handleFiles(Array.from(e.target.files));
         });
 
-        async function handleFiles(files) {
+        async function handleFiles(files, insertIndex = -1) {
             if (files.length === 0) return;
             showAlert("Processing files...");
+
+            const newPages = [];
+            const newFileIds = [];
+
             for (const file of files) {
-                const fileId = crypto.randomUUID();
+                const fileId = generateFileId();
                 try {
                     let rawBuffer;
                     const needsConversion = file.name.match(/\.(xlsx|xls|doc|docx|ppt|pptx|jpg|jpeg|png)$/i);
@@ -607,8 +788,8 @@ function recursiveRemoveDir($dir) {
                     sourcePdfs.get(fileId).pdfjsDoc = pdfjsDoc;
 
                     for (let i = 0; i < pdfjsDoc.numPages; i++) {
-                        state.pageOrder.push({
-                            fileId: fileId,
+                        newPages.push({
+                            fileId,
                             originalIdx: i,
                             rotation: 0,
                             fileName: file.name
@@ -618,81 +799,169 @@ function recursiveRemoveDir($dir) {
                     alert("Error: " + err.message);
                 }
             }
+
+            if (insertIndex === -1) {
+                state.pageOrder.push(...newPages);
+            } else {
+                state.pageOrder.splice(insertIndex, 0, ...newPages);
+            }
+
+            renderWorkspace();
             closeAlert();
-            renderUI();
         }
 
-        function renderUI() {
+        function renderWorkspace() {
+            const fragment = document.createDocumentFragment();
             workspace.innerHTML = '';
+
             if (state.pageOrder.length === 0) {
-                workspace.innerHTML = `<div class="drop-hint"><i class="fa fa-cloud-upload"></i>Drag and Drop PDF, Office or Image files here</div>`;
+                workspace.innerHTML = '<div class="drop-hint" id="drop-hint"><i class="fa-solid fa-file-arrow-up"></i>Drag and Drop files here</div>';
                 return;
             }
 
-            let segmentIndex = 0;
-            const createRenameBar = (idx) => {
-                const div = document.createElement('div');
-                div.className = 'segment-header';
-                const defaultName = `Document_Part_${idx + 1}`;
-                div.innerHTML = `
-                    <span class="segment-label">File ${idx + 1}:</span>
-                    <input type="text" class="rename-input" value="${state.segmentNames[idx] || defaultName}" oninput="state.segmentNames[${idx}] = this.value">
-                    <button class="btn btn-main" style="height:34px; font-size:12px;" onclick="downloadSingleGroup(${idx})">Download</button>
-                `;
-                return div;
+            const firstHeader = createRenameBar(-1);
+            firstHeader.classList.add('force-show');
+            fragment.appendChild(firstHeader);
+
+            state.pageOrder.forEach((p, i) => {
+                const card = createPageCard(p, i);
+                fragment.appendChild(card);
+                fragment.appendChild(createRenameBar(i));
+
+                const canvasId = `canvas-${p.fileId}-${p.originalIdx}-${i}`;
+                drawThumb(p, canvasId);
+            });
+
+            workspace.appendChild(fragment);
+        }
+
+        function createRenameBar(idx) {
+            const div = document.createElement('div');
+            div.className = 'segment-header';
+            div.dataset.forIdx = idx;
+
+            const fileNumber = idx + 2;
+            const defaultName = `Page_${fileNumber}`;
+
+            div.innerHTML = `
+                <span class="segment-label">File Name:</span>
+                <input type="text" class="rename-input" value="${state.segmentNames[idx + 1] || ''}" placeholder="${defaultName}" oninput="state.segmentNames[${idx + 1}] = this.value">
+                <button class="btn btn-main" style="height:34px; font-size:12px;" onclick="downloadSingleGroupFromDOM(${idx})">Download</button>
+            `;
+            return div;
+        }
+
+        function createPageCard(pageObj, index) {
+            const card = document.createElement('div');
+            card.className = 'page-card';
+            card.draggable = true;
+            if (state.selectedIndices.has(index)) card.classList.add('selected');
+            if (state.splits.has(index)) card.classList.add('split-active');
+
+            const canvasId = `canvas-${pageObj.fileId}-${pageObj.originalIdx}-${index}`;
+            card.innerHTML = `
+                <div class="badge"></div>
+                <button class="delete-btn" title="Delete"><i class="fa fa-times"></i></button>
+                <canvas id="${canvasId}" style="transform: rotate(${pageObj.rotation}deg)"></canvas>
+                <button class="rotate-btn" title="Rotate"><i class="fa fa-rotate-right"></i></button>
+                <div style="font-size:11px; color:#94a3b8; margin-top:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${pageObj.fileName}</div>
+            `;
+
+            card.onclick = (e) => {
+                if (e.ctrlKey || e.metaKey) {
+                    if (state.selectedIndices.has(index)) {
+                        state.selectedIndices.delete(index);
+                        card.classList.remove('selected');
+                    } else {
+                        state.selectedIndices.add(index);
+                        card.classList.add('selected');
+                    }
+                } else {
+                    showPreview(index);
+                }
             };
 
-            workspace.appendChild(createRenameBar(segmentIndex++));
+            card.oncontextmenu = (e) => {
+                e.preventDefault();
+                if (index === state.pageOrder.length - 1) return;
 
-            state.pageOrder.forEach((pageObj, currentPos) => {
-                const card = document.createElement('div');
-                card.className = `page-card ${state.splits.has(currentPos) ? 'split-active' : ''}`;
-                card.draggable = true;
-                const canvasId = `canvas-${pageObj.fileId}-${pageObj.originalIdx}-${currentPos}`;
+                if (card.classList.contains('split-active')) {
+                    card.classList.remove('split-active');
+                    state.splits.delete(index);
+                } else {
+                    card.classList.add('split-active');
+                    state.splits.add(index);
+                }
+            };
 
-                card.innerHTML = `
-                    <div class="badge">#${currentPos + 1}</div>
-                    <button class="delete-btn"><i class="fa fa-times"></i></button>
-                    <canvas id="${canvasId}"></canvas>
-                    <button class="rotate-btn"><i class="fa fa-rotate-right"></i></button>
-                    <div style="font-size:11px; color:#94a3b8; margin-top:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${pageObj.fileName}</div>
-                `;
+            card.querySelector('.rotate-btn').onclick = (e) => {
+                e.stopPropagation();
+                pageObj.rotation = (pageObj.rotation + 90) % 360;
+                card.querySelector('canvas').style.transform = `rotate(${pageObj.rotation}deg)`;
+            };
 
-                card.onclick = () => showPreview(currentPos);
-                card.oncontextmenu = (e) => {
-                    e.preventDefault();
-                    if (currentPos === state.pageOrder.length - 1) return;
-                    state.splits.has(currentPos) ? state.splits.delete(currentPos) : state.splits.add(currentPos);
-                    renderUI();
-                };
+            card.querySelector('.delete-btn').onclick = (e) => {
+                e.stopPropagation();
+                state.pageOrder.splice(index, 1);
+                state.selectedIndices.clear(); // Clear to avoid index mismatch
+                renderWorkspace();
+            };
 
-                card.querySelector('.rotate-btn').onclick = (e) => {
-                    e.stopPropagation();
-                    pageObj.rotation = (pageObj.rotation + 90) % 360;
-                    renderUI();
-                };
+            card.ondragstart = (e) => {
+                if (!state.selectedIndices.has(index)) {
+                    state.selectedIndices.clear();
+                    state.selectedIndices.add(index);
+                }
+                e.dataTransfer.setData('text/plain', 'multi');
+            };
 
-                card.querySelector('.delete-btn').onclick = (e) => {
-                    e.stopPropagation();
-                    state.pageOrder.splice(currentPos, 1);
-                    renderUI();
-                };
+            card.ondragover = (e) => {
+                e.preventDefault();
+                const rect = card.getBoundingClientRect();
+                const relX = e.clientX - rect.left;
+                card.style.borderLeft = (relX < rect.width / 2) ? "4px solid var(--primary)" : "";
+                card.style.borderRight = (relX >= rect.width / 2) ? "4px solid var(--primary)" : "";
+            };
 
-                card.ondragstart = (e) => {
-                    e.dataTransfer.setData('text/plain', currentPos);
-                    card.classList.add('dragging');
-                };
-                card.ondrop = (e) => {
-                    const fromPos = parseInt(e.dataTransfer.getData('text/plain'));
-                    const item = state.pageOrder.splice(fromPos, 1)[0];
-                    state.pageOrder.splice(currentPos, 0, item);
-                    renderUI();
-                };
+            card.ondragleave = () => {
+                card.style.borderLeft = "";
+                card.style.borderRight = "";
+            };
 
-                workspace.appendChild(card);
-                drawThumb(pageObj, canvasId);
-                if (state.splits.has(currentPos)) workspace.appendChild(createRenameBar(segmentIndex++));
-            });
+            card.ondrop = (e) => {
+                e.preventDefault();
+                card.style.borderLeft = "";
+                card.style.borderRight = "";
+
+                const rect = card.getBoundingClientRect();
+                const relX = e.clientX - rect.left;
+                const dropInsertIndex = (relX < rect.width / 2) ? index : index + 1;
+
+                if (e.dataTransfer.files.length > 0) {
+                    // Handle external files drop between pages
+                    handleFiles(Array.from(e.dataTransfer.files), dropInsertIndex);
+                } else {
+                    // Handle internal reordering
+                    const sortedSelected = Array.from(state.selectedIndices).sort((a, b) => a - b);
+                    const itemsToMove = sortedSelected.map(i => state.pageOrder[i]);
+
+                    // Remove items
+                    for (let i = sortedSelected.length - 1; i >= 0; i--) {
+                        state.pageOrder.splice(sortedSelected[i], 1);
+                    }
+
+                    // Calculate new insert position
+                    let finalInsert = dropInsertIndex;
+                    const shift = sortedSelected.filter(i => i < dropInsertIndex).length;
+                    finalInsert -= shift;
+
+                    state.pageOrder.splice(finalInsert, 0, ...itemsToMove);
+                    state.selectedIndices.clear();
+                    renderWorkspace();
+                }
+            };
+
+            return card;
         }
 
         async function drawThumb(pageObj, canvasId) {
@@ -707,7 +976,6 @@ function recursiveRemoveDir($dir) {
                 const ctx = canvas.getContext('2d');
                 canvas.height = viewport.height;
                 canvas.width = viewport.width;
-                canvas.style.transform = `rotate(${pageObj.rotation}deg)`;
                 await page.render({
                     canvasContext: ctx,
                     viewport
@@ -717,35 +985,28 @@ function recursiveRemoveDir($dir) {
             }
         }
 
-        // --- Improved Preview & Zoom/Drag Functions ---
-        function updateImageTransform() {
-            const img = document.getElementById('previewImage');
-            const pageObj = state.pageOrder[currentPreviewIdx];
-            const rotation = pageObj ? `rotate(${pageObj.rotation}deg)` : 'rotate(0deg)';
-            img.style.transform = `translate(${translateX}px, ${translateY}px) ${rotation} scale(${zoomLevel})`;
-        }
-
         function showPreview(index) {
+            currentPreviewIdx = index;
             zoomLevel = 1;
             translateX = 0;
             translateY = 0;
-            currentPreviewIdx = index;
-            const pageObj = state.pageOrder[index];
-            const canvasId = `canvas-${pageObj.fileId}-${pageObj.originalIdx}-${index}`;
-            const sourceCanvas = document.getElementById(canvasId);
-            if (!sourceCanvas) return;
+            const cards = workspace.querySelectorAll('.page-card');
+            const sourceCanvas = cards[index].querySelector('canvas');
 
             const img = document.getElementById('previewImage');
             img.src = sourceCanvas.toDataURL('image/png');
             updateImageTransform();
 
             document.getElementById('previewModal').style.display = 'flex';
-
-            const homeBtn = document.querySelector('.home-btn');
-            if (homeBtn) homeBtn.style.display = 'none';
-
             document.getElementById('prevArrow').style.visibility = index > 0 ? 'visible' : 'hidden';
             document.getElementById('nextArrow').style.visibility = index < state.pageOrder.length - 1 ? 'visible' : 'hidden';
+        }
+
+        function updateImageTransform() {
+            const img = document.getElementById('previewImage');
+            const pageObj = state.pageOrder[currentPreviewIdx];
+            const rotation = pageObj ? `rotate(${pageObj.rotation}deg)` : 'rotate(0deg)';
+            img.style.transform = `translate(${translateX}px, ${translateY}px) ${rotation} scale(${zoomLevel})`;
         }
 
         function navigatePreview(direction, event) {
@@ -755,99 +1016,70 @@ function recursiveRemoveDir($dir) {
         }
 
         function closePreview() {
-            isDragging = false;
             document.getElementById('previewModal').style.display = 'none';
-
-            const homeBtn = document.querySelector('.home-btn');
-            if (homeBtn) homeBtn.style.display = 'flex';
         }
 
-        // Zoom and Drag Listeners
-        const modal = document.getElementById('previewModal');
-        const previewImg = document.getElementById('previewImage');
+        // Export Logic 
+        function splitIntoGroups() {
+            const cards = Array.from(workspace.querySelectorAll('.page-card'));
+            const groups = [];
+            let currentGroup = [];
 
-        modal.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const delta = e.deltaY > 0 ? -0.1 : 0.1;
-            zoomLevel = Math.min(Math.max(0.5, zoomLevel + delta), 5);
-            updateImageTransform();
-        }, {
-            passive: false
-        });
+            cards.forEach((card, i) => {
+                currentGroup.push(state.pageOrder[i]);
+                if (card.classList.contains('split-active')) {
+                    groups.push(currentGroup);
+                    currentGroup = [];
+                }
+            });
+            groups.push(currentGroup);
+            return groups;
+        }
 
-        previewImg.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            isDragging = true;
-            startX = e.clientX - translateX;
-            startY = e.clientY - translateY;
-        });
-
-        window.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
-            translateX = e.clientX - startX;
-            translateY = e.clientY - startY;
-            updateImageTransform();
-        });
-
-        window.addEventListener('mouseup', () => isDragging = false);
-
-        // --- Original Export/Download Logic ---
-        async function downloadSingleGroup(index) {
+        async function downloadSingleGroupFromDOM(headerIdx) {
             showAlert("Preparing download...");
-            try {
-                const groups = splitIntoGroups();
-                const bytes = await generatePdfBlob(groups[index]);
-                downloadBlob(bytes, state.segmentNames[index] || `Document_Part_${index + 1}`);
-                closeAlert();
-            } catch (err) {
-                showAlert("Error: " + err.message);
-            }
+            const groups = splitIntoGroups();
+            const headers = Array.from(workspace.querySelectorAll('.segment-header')).filter(h =>
+                h.classList.contains('force-show') || h.previousElementSibling.classList.contains('split-active')
+            );
+            const groupIdx = headers.findIndex(h => h.dataset.forIdx == headerIdx || (headerIdx === -1 && h.classList.contains('force-show')));
+
+            const bytes = await generatePdfBlob(groups[groupIdx]);
+            const nameInput = headers[groupIdx].querySelector('.rename-input');
+            downloadBlob(bytes, nameInput.value || `Document_Page_${groupIdx + 1}`);
+            closeAlert();
         }
 
         async function exportPDF() {
             if (state.pageOrder.length === 0) return showAlert("No pages to export.");
             showAlert("Generating ZIP file...");
-            try {
-                const zip = new JSZip();
-                const groups = splitIntoGroups();
-                for (let i = 0; i < groups.length; i++) {
-                    const bytes = await generatePdfBlob(groups[i]);
-                    const name = state.segmentNames[i] || `Document_Part_${i + 1}`;
-                    zip.file(name.toLowerCase().endsWith('.pdf') ? name : name + '.pdf', bytes);
-                }
-                const zipContent = await zip.generateAsync({
-                    type: "blob"
-                });
-                const url = URL.createObjectURL(zipContent);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = "converted_documents.zip";
-                a.click();
-                showAlert("ZIP Downloaded!");
-            } catch (err) {
-                showAlert("Export Error: " + err.message);
-            }
-        }
+            const zip = new JSZip();
+            const groups = splitIntoGroups();
+            const headers = Array.from(workspace.querySelectorAll('.segment-header')).filter(h =>
+                h.classList.contains('force-show') || h.previousElementSibling.classList.contains('split-active')
+            );
 
-        function splitIntoGroups() {
-            const sortedSplits = Array.from(state.splits).sort((a, b) => a - b);
-            let start = 0;
-            const groups = [];
-            for (const point of sortedSplits) {
-                groups.push(state.pageOrder.slice(start, point + 1));
-                start = point + 1;
+            for (let i = 0; i < groups.length; i++) {
+                const bytes = await generatePdfBlob(groups[i]);
+                const name = headers[i].querySelector('.rename-input').value || `Document_Page_${i + 1}`;
+                zip.file(name.toLowerCase().endsWith('.pdf') ? name : name + '.pdf', bytes);
             }
-            groups.push(state.pageOrder.slice(start));
-            return groups;
+            const content = await zip.generateAsync({
+                type: "blob"
+            });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = "converted_documents.zip";
+            link.click();
+            closeAlert();
         }
 
         async function generatePdfBlob(group) {
-            const pdfLibDocs = new Map();
-            for (let [id, source] of sourcePdfs) pdfLibDocs.set(id, await PDFDocument.load(cloneBuffer(source.buffer)));
             const newDoc = await PDFDocument.create();
+            const cache = new Map();
             for (const pageObj of group) {
-                const srcDoc = pdfLibDocs.get(pageObj.fileId);
+                if (!cache.has(pageObj.fileId)) cache.set(pageObj.fileId, await PDFDocument.load(cloneBuffer(sourcePdfs.get(pageObj.fileId).buffer)));
+                const srcDoc = cache.get(pageObj.fileId);
                 const [copiedPage] = await newDoc.copyPages(srcDoc, [pageObj.originalIdx]);
                 if (pageObj.rotation !== 0) copiedPage.setRotation(degrees(pageObj.rotation));
                 newDoc.addPage(copiedPage);
@@ -859,9 +1091,8 @@ function recursiveRemoveDir($dir) {
             const blob = new Blob([bytes], {
                 type: 'application/pdf'
             });
-            const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
+            a.href = URL.createObjectURL(blob);
             a.download = filename.toLowerCase().endsWith('.pdf') ? filename : filename + '.pdf';
             a.click();
         }
@@ -874,10 +1105,29 @@ function recursiveRemoveDir($dir) {
         function closeAlert() {
             document.getElementById('customAlert').style.display = 'none';
         }
+
+        // Preview zoom and pan
+        document.getElementById('previewModal').addEventListener('wheel', (e) => {
+            e.preventDefault();
+            zoomLevel = Math.min(Math.max(0.5, zoomLevel + (e.deltaY > 0 ? -0.1 : 0.1)), 5);
+            updateImageTransform();
+        }, {
+            passive: false
+        });
+
+        document.getElementById('previewImage').addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX - translateX;
+            startY = e.clientY - translateY;
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            translateX = e.clientX - startX;
+            translateY = e.clientY - startY;
+            updateImageTransform();
+        });
+        window.addEventListener('mouseup', () => isDragging = false);
     </script>
 </body>
 
 </html>
-
-
-
