@@ -162,7 +162,7 @@ if (isset($_POST["submit"])) {
                 exit;
             }
 
-            // Word -> Excel (Table Aware)
+            // Word -> Excel 
             elseif (($extension === 'doc' || $extension === 'docx')
                 && $targetFormat === 'xlsx') {
 
