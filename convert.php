@@ -162,6 +162,133 @@ if (isset($_POST["submit"])) {
                 exit;
             }
 
+            // Word -> Excel (Table Aware)
+            elseif (($extension === 'doc' || $extension === 'docx')
+                && $targetFormat === 'xlsx') {
+
+                $convertedFile = $outDir . DIRECTORY_SEPARATOR .
+                    pathinfo($originalName, PATHINFO_FILENAME) . '.xlsx';
+
+                $phpWord = \PhpOffice\PhpWord\IOFactory::load($tempFile);
+
+                $spreadsheet = new Spreadsheet();
+                $sheet = $spreadsheet->getActiveSheet();
+
+                $excelRow = 1;
+                $tableFound = false;
+
+                foreach ($phpWord->getSections() as $section) {
+
+                    foreach ($section->getElements() as $element) {
+
+                        if ($element instanceof \PhpOffice\PhpWord\Element\Table) {
+
+                            $tableFound = true;
+
+                            foreach ($element->getRows() as $row) {
+
+                                $excelCol = 1;
+
+                                foreach ($row->getCells() as $cell) {
+
+                                    $text = '';
+
+                                    foreach ($cell->getElements() as $cellElement) {
+
+                                        if ($cellElement instanceof \PhpOffice\PhpWord\Element\Text) {
+                                            $text .= $cellElement->getText();
+                                        }
+
+                                        // TextRun
+                                        elseif ($cellElement instanceof \PhpOffice\PhpWord\Element\TextRun) {
+
+                                            foreach ($cellElement->getElements() as $subElement) {
+
+                                                if (method_exists($subElement, 'getText')) {
+                                                    $text .= $subElement->getText();
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    $columnLetter =
+                                        \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($excelCol);
+
+                                    $sheet->setCellValue(
+                                        $columnLetter . $excelRow,
+                                        trim($text)
+                                    );
+
+                                    $excelCol++;
+                                }
+
+                                $excelRow++;
+                            }
+
+                            $excelRow += 2;
+                        }
+                    }
+                }
+
+                if (!$tableFound) {
+
+                    $excelRow = 1;
+
+                    foreach ($phpWord->getSections() as $section) {
+
+                        foreach ($section->getElements() as $element) {
+
+                            if (method_exists($element, 'getText')) {
+
+                                $sheet->setCellValue(
+                                    'A' . $excelRow,
+                                    $element->getText()
+                                );
+
+                                $excelRow++;
+                            }
+                        }
+                    }
+                }
+
+                $highestColumn = $sheet->getHighestColumn();
+
+                $highestColumnIndex =
+                    \PhpOffice\PhpSpreadsheet\Cell\Coordinate::columnIndexFromString(
+                        $highestColumn
+                    );
+
+                for ($i = 1; $i <= $highestColumnIndex; $i++) {
+
+                    $columnLetter =
+                        \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i);
+
+                    $sheet->getColumnDimension($columnLetter)
+                        ->setAutoSize(true);
+                }
+
+                $writer = new Xlsx($spreadsheet);
+                $writer->save($convertedFile);
+
+                header(
+                    'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                );
+
+                header(
+                    'Content-Disposition: attachment; filename="' .
+                    pathinfo($originalName, PATHINFO_FILENAME) .
+                    '.xlsx"'
+                );
+
+                setcookie("fileDownload", "true", time() + 30, "/");
+
+                readfile($convertedFile);
+
+                @unlink($convertedFile);
+
+                exit;
+            }
+
             // Imagick logic for image conversion 
             if (!class_exists('Imagick')) {
                 throw new Exception("Imagick not installed.");
@@ -251,6 +378,29 @@ if (isset($_POST["submit"])) {
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📑</text></svg>">
     <title>File Converter</title>
     <style>
+        :root {
+            --primary: #111827;
+            --primary-hover: #000;
+        }
+
+        /* Pink Theme */
+        body[data-theme="pink"] {
+            --primary: #ec4899;
+            --primary-hover: #db2777;
+        }
+
+        body[data-theme="pink"] .container {
+            border-color: var(--primary);
+        }
+
+        body[data-theme="pink"] h2 {
+            color: var(--primary);
+        }
+
+        body[data-theme="pink"] input[type="submit"] {
+            background: var(--primary) !important;
+        }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: white;
@@ -275,6 +425,83 @@ if (isset($_POST["submit"])) {
             transition: all 0.3s ease;
         }
 
+        .top-right-controls {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        .help-icon {
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 10;
+        }
+
+        .help-icon:hover {
+            color: var(--primary, #111827);
+            transform: scale(1.2) rotate(15deg);
+        }
+
+        .modal-animating {
+            animation: modalShow 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        }
+
+        .modal-closing {
+            animation: modalHide 0.2s ease-in forwards;
+        }
+
+        @keyframes modalShow {
+            from {
+                opacity: 0;
+                transform: scale(0.9) translateY(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        @keyframes modalHide {
+            from {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            to {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+        }
+
+        #help-content {
+            text-align: left;
+            font-size: 14px;
+            line-height: 1.6;
+            padding: 10px 5px;
+        }
+
+        #help-content ul {
+            text-align: left;
+            margin: 10px 0 0 0;
+            padding-left: 0;
+            list-style-type: none;
+        }
+
+        #help-content li {
+            margin-bottom: 10px;
+        }
+
+        .container {
+            position: relative;
+        }
+
         h2 {
             color: #111827;
             text-align: center;
@@ -288,15 +515,15 @@ if (isset($_POST["submit"])) {
             margin-bottom: 8px;
             font-weight: 600;
             font-size: 14px;
-            color: #374151;
+            color: var(--primary, #374151);
         }
 
         .file-upload-label {
             padding: 12px 22px;
             border-radius: 20px;
             background: white;
-            color: black;
-            border: 1px dashed black;
+            color: var(--primary, black);
+            border: 1px dashed #85878a;
             cursor: pointer;
             font-weight: 600;
             font-size: 14px;
@@ -332,15 +559,22 @@ if (isset($_POST["submit"])) {
             height: 44px;
             padding: 0 40px 0 14px;
             border-radius: 20px;
-            border: 1px solid black;
+            border: 1px solid var(--primary, black);
             appearance: none;
             -webkit-appearance: none;
             -moz-appearance: none;
             font-size: 14px;
             font-weight: 600;
-            color: black;
+            color: var(--primary, black);
             cursor: pointer;
             background-color: white;
+            outline: none;
+            transition: border-color 0.25s ease;
+        }
+
+        .select-wrapper:hover select {
+            border: 2px solid var(--primary) !important;
+            padding: 0 39px 0 13px;
         }
 
         .select-wrapper::after {
@@ -353,12 +587,21 @@ if (isset($_POST["submit"])) {
             transform: translateY(-50%);
             pointer-events: none;
             font-size: 20px;
-            color: black;
+            color: var(--primary, black);
+        }
+
+        .select-wrapper select:focus {
+            border-color: var(--primary) !important;
+        }
+
+        .select-wrapper:hover select,
+        .select-wrapper select:focus {
+            border-color: var(--primary) !important;
         }
 
         input[type="submit"] {
             width: 100%;
-            background: #111827;
+            background: var(--primary, #111827);
             color: white;
             border: none;
             padding: 13px;
@@ -371,7 +614,7 @@ if (isset($_POST["submit"])) {
         }
 
         input[type="submit"]:hover {
-            background: #000;
+            background: var(--primary, #000);
             transform: translateY(-1px);
             box-shadow: 0 5px 12px rgba(0, 0, 0, 0.2);
         }
@@ -380,7 +623,7 @@ if (isset($_POST["submit"])) {
             margin-top: 20px;
             padding: 15px;
             background: #f9fafb;
-            border-left: 4px solid #111827;
+            border-left: 4px solid var(--primary, #111827);
             border-radius: 6px;
             font-size: 14px;
             word-break: break-word;
@@ -434,7 +677,7 @@ if (isset($_POST["submit"])) {
             position: fixed;
             top: 20px;
             right: 20px;
-            color: #1e293b;
+            color: var(--primary, #1e293b);
             font-size: 10px;
             display: flex;
             align-items: center;
@@ -469,20 +712,37 @@ if (isset($_POST["submit"])) {
         }
 
         .btn-main {
-            background: #111827;
+            background: var(--primary, #111827) !important;
             color: white;
             border: none;
             padding: 10px 25px;
-            border-radius: 15px;
+            border-radius: 20px;
             cursor: pointer;
             font-weight: 600;
             margin-top: 15px;
+        }
+
+        .btn-main:hover {
+            background: var(--primary-hover) !important;
+            transform: translateY(-1px);
+        }
+
+        #alertTitle {
+            color: var(--primary);
+            margin-top: 0;
         }
     </style>
 </head>
 
 <body>
     <div class="container">
+        <div class="top-right-controls">
+            <div class="theme-switcher">
+                <button onclick="setTheme('default')" title="Default Theme" style="background:#111827; width:16px; height:16px; border-radius:50%; border:2px solid #fff; cursor:pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></button>
+                <button onclick="setTheme('pink')" title="Pink Theme" style="background:#ec4899; width:16px; height:16px; border-radius:50%; border:2px solid #fff; cursor:pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></button>
+            </div>
+            <i class="fa-regular fa-circle-question help-icon" title="How to use" onclick="showHelp()"></i>
+        </div>
         <h2>File Converter</h2>
         <form id="convertForm" action="" method="post" enctype="multipart/form-data">
             <label>Choose File</label>
@@ -528,6 +788,79 @@ if (isset($_POST["submit"])) {
     </div>
 
     <script>
+        function setTheme(theme) {
+            if (theme === 'pink') {
+                document.body.setAttribute('data-theme', 'pink');
+                localStorage.setItem('selected-theme', 'pink');
+            } else {
+                document.body.removeAttribute('data-theme');
+                localStorage.setItem('selected-theme', 'default');
+            }
+        }
+
+        // Apply saved theme on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedTheme = localStorage.getItem('selected-theme');
+            if (savedTheme === 'pink') setTheme('pink');
+        });
+
+        function showHelp() {
+            const helpText = `
+            <div id="help-content">
+                <strong>Support:</strong>
+                <ul>
+                    <li><strong>Word - PDF</li>
+                     <li><strong>Word - Excel</li>
+                    <li><strong>Excel - PDF</li>
+                    <li><strong>PDF - Word</li>
+                    <li><strong>PDF - PPT</li>
+                    <li><strong>PDF - Excel</li>
+                </ul>
+            </div>
+        `;
+
+            const alertModal = document.getElementById('customAlert');
+            const modalContent = alertModal.querySelector('div');
+
+            document.getElementById('alertTitle').innerText = "How to Use";
+            document.getElementById('alertMessage').innerHTML = helpText;
+
+            modalContent.style.maxWidth = "500px";
+
+            alertModal.style.display = 'flex';
+            modalContent.classList.remove('modal-closing');
+            modalContent.classList.add('modal-animating');
+        }
+
+        function showAlert(message, title = "Status") {
+            const alertModal = document.getElementById('customAlert');
+            const modalContent = alertModal.querySelector('div');
+
+            document.getElementById('alertTitle').innerText = title;
+            document.getElementById('alertMessage').innerText = message;
+
+            alertModal.style.display = 'flex';
+            modalContent.classList.remove('modal-closing');
+            modalContent.classList.add('modal-animating');
+        }
+
+        function closeAlert() {
+            const alertModal = document.getElementById('customAlert');
+            const modalContainer = alertModal.querySelector('div');
+
+            modalContainer.classList.remove('modal-animating');
+            modalContainer.classList.add('modal-closing');
+
+            setTimeout(() => {
+                alertModal.style.display = 'none';
+                modalContainer.classList.remove('modal-closing');
+
+                document.getElementById('alertTitle').innerText = "Status";
+                document.getElementById('alertMessage').innerText = "";
+                modalContainer.style.maxWidth = "360px";
+            }, 200);
+        }
+
         function showAlert(message, title = "Status") {
             document.getElementById('alertTitle').innerText = title;
             document.getElementById('alertMessage').innerText = message;
